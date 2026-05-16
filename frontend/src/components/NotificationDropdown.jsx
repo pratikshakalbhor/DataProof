@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Bell, CheckCircle, AlertTriangle, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getAllFiles } from '../utils/api';
 
@@ -23,7 +23,7 @@ export default function NotificationDropdown({ walletAddress }) {
           alerts.push({
             id:    `t-${f.fileId}`,
             type:  'critical',
-            title: '🚨 TAMPER DETECTED',
+            title: 'TAMPER DETECTED',
             text:  `"${f.filename}" — hash mismatch on blockchain!`,
             page:  '/verify',
             time:  f.verifiedAt || f.uploadedAt,
@@ -34,7 +34,7 @@ export default function NotificationDropdown({ walletAddress }) {
           alerts.push({
             id:    `p-${f.fileId}`,
             type:  'warning',
-            title: '⏳ Blockchain Seal Pending',
+            title: 'Blockchain Seal Pending',
             text:  `"${f.filename}" not yet sealed on Ethereum.`,
             page:  '/my-files',
             time:  f.uploadedAt,
@@ -45,7 +45,7 @@ export default function NotificationDropdown({ walletAddress }) {
           alerts.push({
             id:    `e-${f.fileId}`,
             type:  'info',
-            title: '📅 File Expired',
+            title: 'File Expired',
             text:  `"${f.filename}" is no longer valid.`,
             page:  '/my-files',
             time:  f.expiryDate,
@@ -58,7 +58,7 @@ export default function NotificationDropdown({ walletAddress }) {
         alerts.push({
           id:    'storage-warn',
           type:  'warning',
-          title: '💾 Storage Warning',
+          title: 'Storage Warning',
           text:  `Vault at ${files.length} files — clean up recommended.`,
           page:  '/my-files',
           time:  new Date().toISOString(),
@@ -163,8 +163,8 @@ export default function NotificationDropdown({ walletAddress }) {
                     {n.time && (
                       <div style={{ fontSize: '10px',
                         color: 'var(--muted)', marginTop: 4,
-                        fontFamily: 'var(--font-mono, monospace)' }}>
-                        🕐 {new Date(n.time).toLocaleString()}
+                        fontFamily: 'var(--font-mono, monospace)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Clock size={10} /> {new Date(n.time).toLocaleString()}
                       </div>
                     )}
                   </div>

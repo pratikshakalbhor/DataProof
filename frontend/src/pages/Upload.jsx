@@ -1,5 +1,10 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Lock, Cloud, CheckCircle2, AlertTriangle, 
+  Fingerprint, Shield, X, Check, 
+  Clock, Wallet, Hash, Activity, ShieldCheck, ArrowRight
+} from 'lucide-react';
 import { pageVariants, cardVariants, fadeIn } from '../utils/animations';
 import { sealFileOnBlockchain, getTxUrl } from '../utils/blockchain';
 import '../styles/Upload.css';
@@ -7,12 +12,12 @@ import '../styles/Upload.css';
 const API = (process.env.REACT_APP_API_URL || 'http://localhost:5000').replace(/\/api$/, '') + '/api';
 
 const STEPS = [
-  { pct: 20,  label: 'Generating SHA-256 Hash...',       icon: '#' },
-  { pct: 40,  label: 'Encrypting File (AES-256)...',     icon: '🔐' },
-  { pct: 60,  label: 'Uploading to IPFS Backup...',      icon: '☁️' },
-  { pct: 80,  label: 'Waiting for MetaMask...',           icon: '🦊' },
-  { pct: 90,  label: 'Registering on Blockchain...',     icon: '⛓️' },
-  { pct: 100, label: 'Vault Secured!',                   icon: '✅' },
+  { pct: 20,  label: 'Generating SHA-256 Hash...',       icon: <Hash size={14} /> },
+  { pct: 40,  label: 'Encrypting File (AES-256)...',     icon: <Lock size={14} /> },
+  { pct: 60,  label: 'Uploading to IPFS Backup...',      icon: <Cloud size={14} /> },
+  { pct: 80,  label: 'Waiting for MetaMask...',           icon: <Wallet size={14} /> },
+  { pct: 90,  label: 'Registering on Blockchain...',     icon: <Activity size={14} /> },
+  { pct: 100, label: 'Vault Secured!',                   icon: <CheckCircle2 size={14} /> },
 ];
 
 export default function Upload({ walletAddress, onNavigate }) {
@@ -104,7 +109,7 @@ export default function Upload({ walletAddress, onNavigate }) {
         // User rejected or network error — file still saved, blockchain is optional
         // But we show a clear warning in the result
         if (bcErr.message?.includes('user rejected') || bcErr.code === 4001) {
-          setError('⚠️ MetaMask transaction was rejected. File saved to vault but NOT sealed on blockchain.');
+          setError('MetaMask transaction was rejected. File saved to vault but NOT sealed on blockchain.');
         }
       }
 
@@ -241,9 +246,9 @@ export default function Upload({ walletAddress, onNavigate }) {
                 marginTop: 32,
               }}>
                 {[
-                  { icon: '🔐', title: 'AES-256', desc: 'Enterprise Grade Encryption', color: 'var(--accent-purple)' },
-                  { icon: '🆔', title: 'SHA-256', desc: 'Cryptographic Fingerprinting', color: 'var(--accent-cyan)' },
-                  { icon: '⛓️', title: 'ETH SEAL', desc: 'Immutable Blockchain Proof', color: 'var(--accent-teal)' },
+                  { icon: <Lock size={24} />, title: 'AES-256', desc: 'Enterprise Grade Encryption', color: 'var(--accent-purple)' },
+                  { icon: <Fingerprint size={24} />, title: 'SHA-256', desc: 'Cryptographic Fingerprinting', color: 'var(--accent-cyan)' },
+                  { icon: <Activity size={24} />, title: 'ETH SEAL', desc: 'Immutable Blockchain Proof', color: 'var(--accent-teal)' },
                 ].map((item, i) => (
                   <motion.div 
                     key={i} 
@@ -281,7 +286,7 @@ export default function Upload({ walletAddress, onNavigate }) {
                   fontSize: 13, color: 'var(--accent-red)',
                   display: 'flex', alignItems: 'center', gap: 10
                 }}>
-                  <span>⚠️</span> {error}
+                  <AlertTriangle size={16} /> {error}
                 </div>
               )}
 
@@ -310,12 +315,12 @@ export default function Upload({ walletAddress, onNavigate }) {
                     onClick={reset} 
                     style={{
                       background: 'none', border: 'none', cursor: 'pointer',
-                      color: 'var(--text-muted)', fontSize: 18, padding: '8px',
-                    }}>✕</motion.button>
+                      color: 'var(--text-muted)', display: 'flex', padding: '8px',
+                    }}><X size={18} /></motion.button>
                 </div>
               </div>
 
-              <motion.button
+                <motion.button
                 whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(0, 229, 255, 0.3)' }} 
                 whileTap={{ scale: 0.98 }}
                 onClick={handleUpload}
@@ -327,7 +332,7 @@ export default function Upload({ walletAddress, onNavigate }) {
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
                   boxShadow: '0 4px 15px rgba(0, 0, 0, 0.2)'
                 }}>
-                <span>🛡️</span> SECURE ON BLOCKCHAIN
+                <Shield size={18} /> SECURE ON BLOCKCHAIN
               </motion.button>
               
               <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-muted)', marginTop: 16 }}>
@@ -393,7 +398,7 @@ export default function Upload({ walletAddress, onNavigate }) {
                           color: done ? 'var(--accent-teal)' : active ? 'var(--accent-cyan)' : 'var(--text-muted)',
                           fontSize: 12,
                         }}>
-                          {done ? '✓' : active ? (
+                          {done ? <Check size={14} /> : active ? (
                             <motion.div 
                               animate={{ rotate: 360 }} 
                               transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
@@ -445,11 +450,11 @@ export default function Upload({ walletAddress, onNavigate }) {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: 40,
+                      color: 'var(--accent-teal)',
                       margin: '0 auto 20px',
                       boxShadow: '0 0 30px rgba(0, 255, 163, 0.15)'
                     }}>
-                    ✓
+                    <ShieldCheck size={40} />
                   </motion.div>
                   <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent-teal)', marginBottom: 8 }}>
                     {result.duplicate
@@ -496,7 +501,9 @@ export default function Upload({ walletAddress, onNavigate }) {
                         borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.05)'
                       }}>
                         {row.value === 'pending'
-                          ? <span style={{ color: 'var(--accent-orange)' }}>⏳ Awaiting block confirmation...</span>
+                          ? <span style={{ color: 'var(--accent-orange)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <Clock size={12} className="spin" /> Awaiting block confirmation...
+                            </span>
                           : row.value}
                       </div>
                     </div>
@@ -538,7 +545,7 @@ export default function Upload({ walletAddress, onNavigate }) {
                       background: 'var(--accent-teal)', color: '#000',
                       fontSize: 13, fontWeight: 800
                     }}>
-                    View Forensic Vault →
+                    View Forensic Vault <ArrowRight size={14} />
                   </motion.button>
                 </div>
               </div>

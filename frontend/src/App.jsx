@@ -22,13 +22,13 @@ import Topbar from './components/Topbar';
 
 const TITLES = {
   '/dashboard': 'Dashboard',
-  '/upload': 'Upload Asset',
+  '/upload': 'Upload File',
+  '/my-files': 'My Files',
   '/verify': 'Verify Integrity',
-  '/my-files': 'My Vault',
-  '/archive': 'Forensic Archive',
-  '/blockchain-log': 'Blockchain Log',
-  '/profile': 'Profile Settings',
   '/recovery': 'Recovery Hub',
+  '/blockchain-log': 'Blockchain Log',
+  '/archive': 'Forensic Archive',
+  '/profile': 'Profile',
 };
 
 function usePageTitle() {
@@ -40,14 +40,17 @@ function usePageTitle() {
 function AppLayout({ walletAddress, onLogout }) {
   const title = usePageTitle();
   const navigate = useNavigate();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   return (
-    <div className="app-container">
-      <Sidebar onLogout={onLogout} />
-      <div className="main-layout">
+    <div className={`app-container${mobileOpen ? ' mobile-sidebar-open' : ''}`}>
+      <Sidebar onLogout={onLogout} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <div className="main-layout" onClick={() => mobileOpen && setMobileOpen(false)}>
         <Topbar 
           walletAddress={walletAddress} 
           pageTitle={title} 
           onDisconnect={onLogout} 
+          onMenuClick={() => setMobileOpen(!mobileOpen)}
         />
         <main className="content-area">
           <div className="page">

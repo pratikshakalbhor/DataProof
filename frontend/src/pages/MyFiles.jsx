@@ -277,7 +277,7 @@ export default function MyFiles({ walletAddress }) {
                         </button>
 
                         {/* Restore Button (Forensic Logic) */}
-                        {(f.status === 'tampered' || f.status === 'corrupted' || f.status === 'UNDER_INVESTIGATION') && (
+                        {(f.status === 'tampered' || f.status === 'corrupted' || f.status === 'UNDER_INVESTIGATION') ? (
                           <button
                             className="btn btn-teal"
                             style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
@@ -287,10 +287,12 @@ export default function MyFiles({ walletAddress }) {
                           >
                             <RefreshCw size={13} className={processing === fileId ? "spin" : ""} /> Restore
                           </button>
+                        ) : (
+                          <div style={{ width: 75 }} />
                         )}
 
                         {/* Blockchain Proof Button */}
-                        {txHash && (
+                        {txHash ? (
                           <a
                             href={`https://sepolia.etherscan.io/tx/${txHash}`}
                             target="_blank" rel="noreferrer"
@@ -300,6 +302,8 @@ export default function MyFiles({ walletAddress }) {
                           >
                             <ExternalLink size={13} /> Proof
                           </a>
+                        ) : (
+                          <div style={{ width: 68 }} />
                         )}
 
                         {/* Archive Button */}

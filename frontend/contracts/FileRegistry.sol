@@ -22,7 +22,7 @@ contract FileRegistry {
         uint256 timestamp
     );
 
-    // ✅ Updated with ipfsCID and automatic signer tracking
+    // Updated with ipfsCID and automatic signer tracking
     function registerFile(string calldata fileHash, string calldata ipfsCID) external {
         require(!files[fileHash].exists, "File already registered");
         files[fileHash] = File({

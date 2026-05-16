@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getAllFiles, getStats } from '../utils/api';
 import {
   Activity, AlertTriangle, Clock, FileText,
-  RefreshCw, UploadCloud, Shield, Zap
+  RefreshCw, UploadCloud, Shield, Zap, ArrowRight
 } from 'lucide-react';
 import {
   Tooltip, ResponsiveContainer,
@@ -203,7 +203,7 @@ export default function Dashboard({ walletAddress }) {
               <Clock size={16} color="var(--text-secondary)" /> 
               <span>Forensic Audit Log</span>
             </span>
-            <button className="view-all" onClick={() => navigate('/my-files')}>View Full Ledger →</button>
+            <button className="view-all" onClick={() => navigate('/my-files')}>View Full Ledger <ArrowRight size={14} /></button>
           </div>
           
           <div style={{ overflowX: 'auto' }}>

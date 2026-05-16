@@ -88,7 +88,7 @@ export default function FileDetails({ walletAddress }) {
       {/* Status Banner */}
       <div className={`vr ${isValid ? 'valid' : isTampered ? 'tampered' : ''}`} style={{ textAlign: 'center', marginBottom: 20 }}>
         <div className="vr-ico">{isValid ? <CheckCircle size={18} /> : isTampered ? <AlertTriangle size={18} /> : <Activity size={18} />}</div>
-        <h2>{isValid ? '✅ This file is authentic' : isTampered ? '⚠️ This file is tampered!' : '⏳ Verification Pending'}</h2>
+        <h2>{isValid ? 'This file is authentic' : isTampered ? 'This file is tampered!' : 'Verification Pending'}</h2>
         <p style={{ marginTop: 5, fontSize: 13 }}>
           {isValid
             ? 'Integrity verified on-chain. The file perfectly matches its original blockchain record.'

@@ -7,7 +7,8 @@ import { cardVariants, staggerContainer } from '../utils/animations';
 import {
   AlertTriangle, CheckCircle, Clipboard,
   ExternalLink, FileText, LogOut, RefreshCw, ShieldCheck,
-  Trash2, UploadCloud, Wallet, Zap, User
+  Trash2, UploadCloud, Wallet, Zap, User,
+  Shield, Star, CheckCircle2, Hexagon, ArrowRight, Award
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────
@@ -74,9 +75,9 @@ function BlockiesAvatar({ address, size = 68 }) {
 //  Tier logic
 // ─────────────────────────────────────────────
 function getTier(n) {
-  if (n >= 51) return { label: 'Sentinel',         color: '#FB7185', icon: '🛡️', next: null,  nextAt: 51  };
-  if (n >= 11) return { label: 'Trusted Verifier', color: '#A78BFA', icon: '✅', next: 51,    nextAt: 50  };
-  return             { label: 'Novice',             color: '#2DD4BF', icon: '⭐', next: 11,    nextAt: 10  };
+  if (n >= 51) return { label: 'Sentinel',         color: '#FB7185', icon: <Shield size={14} />,         next: null,  nextAt: 51  };
+  if (n >= 11) return { label: 'Trusted Verifier', color: '#A78BFA', icon: <CheckCircle2 size={14} />, next: 51,    nextAt: 50  };
+  return             { label: 'Novice',             color: '#2DD4BF', icon: <Star size={14} />,          next: 11,    nextAt: 10  };
 }
 
 // ─────────────────────────────────────────────
@@ -189,7 +190,7 @@ export default function Profile({ walletAddress, onLogout }) {
           </div>
 
           <div className="pf-meta-row">
-            <span className="pf-net-pill">⬡ Sepolia Testnet</span>
+            <span className="pf-net-pill"><Hexagon size={12} style={{ marginRight: 4 }} /> Sepolia Testnet</span>
             <span className="pf-eth-pill">
               <Wallet size={12} />
               {balLoad ? '…' : `${ethBal ?? '—'} ETH`}
@@ -286,7 +287,7 @@ export default function Profile({ walletAddress, onLogout }) {
             <div className="tier-progress-section">
               <div className="tier-progress-labels">
                 <span>Tier progress</span>
-                {tier.next ? <span>{stats.total}/{tier.nextAt} → {tier.icon} next</span> : <span style={{ color: tier.color }}>🏆 Max tier!</span>}
+                {tier.next ? <span>{stats.total}/{tier.nextAt} <ArrowRight size={12} /> {tier.icon} next</span> : <span style={{ color: tier.color }}><Award size={14} style={{ marginRight: 4 }} /> Max tier!</span>}
               </div>
               <div className="pf-tier-track">
                 <div className="pf-tier-fill" style={{ width: `${tierPct}%`, '--tf-color': tier.color }} />

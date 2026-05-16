@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  CheckCircle, AlertTriangle, Clock, Lock, 
+  Search, RefreshCw, Microscope, ChevronDown, 
+  ExternalLink, Link
+} from 'lucide-react';
 import ForensicModal from '../components/ForensicModal';
 
 const API_URL = (process.env.REACT_APP_API_URL || 'http://localhost:5000').replace(/\/api\/?$/, '');
@@ -13,13 +18,13 @@ const cardV = {
 
 const STATUS_CONFIG = {
   valid:    { color: '#14b8a6', bg: 'rgba(20,184,166,0.1)',
-              border: 'rgba(20,184,166,0.3)', label: 'VALID',    icon: '✅' },
+              border: 'rgba(20,184,166,0.3)', label: 'VALID',    icon: <CheckCircle size={20} /> },
   tampered: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',
-              border: 'rgba(239,68,68,0.3)',  label: 'TAMPERED', icon: '⚠️' },
+              border: 'rgba(239,68,68,0.3)',  label: 'TAMPERED', icon: <AlertTriangle size={20} /> },
   pending:  { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',
-              border: 'rgba(245,158,11,0.3)', label: 'PENDING',  icon: '⏳' },
+              border: 'rgba(245,158,11,0.3)', label: 'PENDING',  icon: <Clock size={20} /> },
   revoked:  { color: '#64748b', bg: 'rgba(100,116,139,0.1)',
-              border: 'rgba(100,116,139,0.3)',label: 'REVOKED',  icon: '🔒' },
+              border: 'rgba(100,116,139,0.3)',label: 'REVOKED',  icon: <Lock size={20} /> },
 };
 
 export default function RecoveryHub({ walletAddress, onNotify }) {
@@ -63,7 +68,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
     try {
       const { restoreFile } = await import('../utils/api');
       await restoreFile(file.fileId);
-      onNotify?.('✅ File integrity restored directly in vault!', 'success');
+      onNotify?.('File integrity restored directly in vault!', 'success');
       fetchFiles();
     } catch (e) {
       onNotify?.('❌ Restore failed: ' + e.message, 'error');
@@ -130,7 +135,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
   return (
     <div className="page-inner">
       {/* Header */}
-      <div style={S.title}>🔄 Recovery Hub</div>
+      <div style={S.title}><RefreshCw size={24} style={{ verticalAlign: 'middle', marginRight: 10 }} className="icon-spin-hover" /> Recovery Hub</div>
       <div style={S.sub}>
         Detect, audit, and restore tampered or compromised files
       </div>
@@ -174,17 +179,20 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
             <button key={f} style={S.tab(filter === f)}
               onClick={() => setFilter(f)}>
               {f === 'tampered' && tamperedCount > 0
-                ? `⚠️ Tampered (${tamperedCount})`
+                ? <><AlertTriangle size={14} style={{ marginRight: 6 }} /> Tampered ({tamperedCount})</>
                 : f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
           ))}
         </div>
-        <input
-          style={S.input}
-          placeholder="🔍 Search by filename or file ID..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              style={{ ...S.input, paddingLeft: 36 }}
+              placeholder="Search by filename or file ID..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
       </motion.div>
 
       {/* ── File List ── */}
@@ -202,7 +210,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
             style={{ ...S.card, textAlign: 'center',
               padding: 40, color: 'var(--muted)' }}>
             {filter === 'tampered'
-              ? '✅ No tampered files found!'
+              ? 'No tampered files found!'
               : 'No files match your filter.'}
           </motion.div>
         ) : (
@@ -272,7 +280,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
                             e.stopPropagation();
                             setForensicFile(file);
                           }}>
-                          🔬 Forensic
+                          <Microscope size={14} /> Forensic
                         </button>
                         {(file.status === 'tampered' || file.status === 'corrupted' || file.status === 'under_investigation') && (
                           <button
@@ -283,20 +291,23 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
                               handleRestore(file);
                             }}>
                             {recovering === file.fileId
-                              ? '⏳ Restoring...'
-                              : '🔄 Restore'}
+                              ? <Clock size={14} className="spin" style={{ marginRight: 6 }} />
+                              : <RefreshCw size={14} style={{ marginRight: 6 }} />}
+                            {recovering === file.fileId
+                              ? 'Restoring...'
+                              : 'Restore'}
                           </button>
                         )}
                       </div>
 
                     {/* Expand arrow */}
                     <span style={{
-                      color: 'var(--muted)', fontSize: 12,
+                      color: 'var(--muted)', display: 'flex',
                       flexShrink: 0,
                       transform: isSelected
                         ? 'rotate(180deg)' : 'rotate(0deg)',
                       transition: 'transform 0.2s',
-                    }}>▼</span>
+                    }}><ChevronDown size={14} /></span>
                   </div>
 
                   {/* ── Expanded Detail ── */}
@@ -361,7 +372,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
                                   fontSize: 12, color: '#00d4ff',
                                   textDecoration: 'none',
                                 }}>
-                                🔗 View on Etherscan ↗
+                                <Link size={12} style={{ marginRight: 6 }} /> View on Etherscan <ExternalLink size={10} style={{ marginLeft: 4 }} />
                               </a>
                             </div>
                           )}

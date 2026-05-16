@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import '../styles/Login.css';
 import { scalePop, cardVariants, staggerContainer, fadeIn } from '../utils/animations';
-import { CheckCircle, ShieldCheck, Lock, AlertTriangle } from 'lucide-react';
+import { CheckCircle, Lock, AlertTriangle, ArrowRight } from 'lucide-react';
 
 const WALLETS = [
   {
@@ -113,17 +113,19 @@ export default function Login({ onConnected }) {
       <motion.div className="login-card" variants={cardVariants} initial="initial" animate="animate">
 
         {/* Logo */}
-        <motion.div className="login-logo" variants={fadeIn} initial="initial" animate="animate">
-          <motion.div className="login-logo-icon"
-            whileHover={{ rotate: [0, -10, 10, 0], scale: 1.1 }}
-            transition={{ duration: 0.4 }}
-          >
-            <ShieldCheck size={28} />
-          </motion.div>
-          <div>
-            <div className="login-logo-text">BlockVerify</div>
-            <div className="login-logo-sub">Secure File Storage</div>
-          </div>
+        <motion.div className="login-logo" variants={fadeIn} initial="initial" animate="animate" style={{ flexDirection: 'column', alignItems: 'center', gap: 16, marginBottom: 32 }}>
+          <motion.img 
+            src="/logo.jpg" 
+            alt="DataProof Logo" 
+            style={{ 
+              width: '80px', 
+              height: 'auto', 
+              borderRadius: '8px',
+              boxShadow: '0 4px 15px rgba(0, 212, 255, 0.08)'
+            }}
+            whileHover={{ scale: 1.05 }}
+            transition={{ type: 'spring', stiffness: 300 }}
+          />
         </motion.div>
 
         <AnimatePresence mode="wait">
@@ -154,7 +156,7 @@ export default function Login({ onConnected }) {
                       </div>
                       <div className="wallet-btn-desc">{w.desc}</div>
                     </div>
-                    <motion.span className="wallet-btn-arrow" whileHover={{ x: 4 }}>→</motion.span>
+                    <motion.span className="wallet-btn-arrow" whileHover={{ x: 4 }}><ArrowRight size={16} /></motion.span>
                   </motion.button>
                 ))}
               </motion.div>

@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Shield, ShieldCheck, ShieldAlert, AlertTriangle, 
+  Check, X, FlaskConical, Lock, 
+  RefreshCw, FileText
+} from 'lucide-react';
 import { pageVariants, cardVariants } from '../utils/animations';
 import { verifyFileOnChain } from '../utils/blockchain';
 import '../styles/Verify.css';
@@ -74,7 +79,7 @@ export default function Verify({ walletAddress, onNotify }) {
       const isValid = data.status === 'valid' || data.isMatch;
       if (typeof onNotify === 'function') {
         onNotify(
-          isValid ? '✅ Integrity verified — file authentic' : '🚨 TAMPER DETECTED!',
+          isValid ? 'Integrity verified — file authentic' : 'TAMPER DETECTED!',
           isValid ? 'success' : 'error'
         );
       }
@@ -109,7 +114,7 @@ export default function Verify({ walletAddress, onNotify }) {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      if (typeof onNotify === 'function') onNotify('✅ File downloaded to your computer!', 'success');
+      if (typeof onNotify === 'function') onNotify('File downloaded to your computer!', 'success');
 
     } catch (err) {
       if (typeof onNotify === 'function') onNotify('Download failed: ' + err.message, 'error');
@@ -178,7 +183,7 @@ export default function Verify({ walletAddress, onNotify }) {
                   alignItems: 'center',
                   gap: 10
                 }}>
-                  <span>⚠️</span> {error}
+                  <AlertTriangle size={16} /> {error}
                 </div>
               )}
 
@@ -232,7 +237,7 @@ export default function Verify({ walletAddress, onNotify }) {
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       fontSize: 14, fontWeight: 800, flexShrink: 0
                     }}>
-                      {suspiciousFile ? '✓' : '2'}
+                      {suspiciousFile ? <Check size={18} /> : '2'}
                     </div>
                     <div style={{ flex: 1 }}>
                       <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>Upload Forensic Subject</h3>
@@ -241,7 +246,7 @@ export default function Verify({ walletAddress, onNotify }) {
                     {suspiciousFile && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(0, 0, 0, 0.2)', padding: '8px 14px', borderRadius: 10, border: '1px solid rgba(0, 255, 163, 0.1)' }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-teal)' }}>{suspiciousFile.name}</div>
-                        <button onClick={() => setSuspiciousFile(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 16 }}>✕</button>
+                        <button onClick={() => setSuspiciousFile(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}><X size={14} /></button>
                       </div>
                     )}
                   </div>
@@ -260,7 +265,7 @@ export default function Verify({ walletAddress, onNotify }) {
                         cursor: vaultFile ? 'pointer' : 'not-allowed'
                       }}>
                       <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={e => e.target.files[0] && setSuspiciousFile(e.target.files[0])} />
-                      <div style={{ fontSize: 32, marginBottom: 12 }}>🧪</div>
+                      <div style={{ marginBottom: 12, color: 'var(--accent-cyan)' }}><FlaskConical size={32} /></div>
                       <h4 style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Drop Suspect Asset</h4>
                       <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Analyze local copy for tampering</p>
                     </div>
@@ -277,7 +282,7 @@ export default function Verify({ walletAddress, onNotify }) {
                     zIndex: 10, border: '1px solid rgba(255, 255, 255, 0.05)'
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-card)', padding: '10px 20px', borderRadius: '30px', border: '1px solid var(--border)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-                      <span style={{ fontSize: 16 }}>🔒</span>
+                      <Lock size={16} color="var(--accent-orange)" />
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Complete Step 1 First</span>
                     </div>
                   </div>
@@ -333,8 +338,8 @@ export default function Verify({ walletAddress, onNotify }) {
                     transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
                     style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(0, 229, 255, 0.1)', borderTopColor: 'var(--accent-cyan)' }} 
                   />
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32 }}>
-                    🛡️
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-cyan)' }}>
+                    <Shield size={32} />
                   </div>
                 </div>
                 
@@ -358,7 +363,7 @@ export default function Verify({ walletAddress, onNotify }) {
                         color: auditStep >= i + 1 ? '#000' : 'var(--text-muted)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center'
                       }}>
-                        {auditStep > i + 1 ? '✓' : i + 1}
+                        {auditStep > i + 1 ? <Check size={14} /> : i + 1}
                       </div>
                       <span style={{ fontSize: 13, fontWeight: auditStep === i + 1 ? 700 : 500, color: auditStep === i + 1 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{s}</span>
                     </div>
@@ -387,7 +392,9 @@ export default function Verify({ walletAddress, onNotify }) {
                   opacity: 0.05, borderRadius: '50%', filter: 'blur(40px)' 
                 }} />
 
-                <div style={{ fontSize: 48, marginBottom: 20 }}>{isValid ? '🛡️' : '⚠️'}</div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+                  {isValid ? <ShieldCheck size={56} color="var(--accent-teal)" /> : <ShieldAlert size={56} color="var(--accent-red)" />}
+                </div>
                 <h2 style={{ fontSize: 26, fontWeight: 800, margin: '0 0 10px', color: isValid ? 'var(--accent-teal)' : 'var(--accent-red)', letterSpacing: '-0.02em' }}>
                   {isValid ? 'INTEGRITY VERIFIED' : 'TAMPER DETECTED'}
                 </h2>
@@ -502,7 +509,8 @@ export default function Verify({ walletAddress, onNotify }) {
                     whileTap={{ scale: 0.98 }}
                     className="btn btn-p" onClick={handleRestore} disabled={restoring} 
                     style={{ flex: 1.5, height: 50, borderRadius: 12, background: 'var(--accent-red)', color: '#fff', fontWeight: 800 }}>
-                    {restoring ? '🔄 EXECUTING RESTORATION...' : '🛡️ RESTORE VAULT ORIGINAL'}
+                    {restoring ? <RefreshCw size={16} className="spin" style={{ marginRight: 8 }} /> : <Shield size={16} style={{ marginRight: 8 }} />}
+                    {restoring ? 'EXECUTING RESTORATION...' : 'RESTORE VAULT ORIGINAL'}
                   </motion.button>
                 ) : (
                   <motion.button 
@@ -510,7 +518,8 @@ export default function Verify({ walletAddress, onNotify }) {
                     whileTap={{ scale: 0.98 }}
                     className="btn btn-teal" 
                     style={{ flex: 1.5, height: 50, borderRadius: 12, fontWeight: 800 }}>
-                    📜 GENERATE VALIDITY REPORT
+                    <FileText size={16} style={{ marginRight: 8 }} />
+                    GENERATE VALIDITY REPORT
                   </motion.button>
                 )}
               </div>
@@ -525,7 +534,7 @@ export default function Verify({ walletAddress, onNotify }) {
               <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 20, width: '100%', maxWidth: 500, maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
                 <div style={{ padding: 20, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 style={{ margin: 0 }}>Select Record</h3>
-                  <button onClick={() => setShowVaultPick(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>✕</button>
+                  <button onClick={() => setShowVaultPick(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex' }}><X size={18} /></button>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
                   {vaultFiles.map(f => (

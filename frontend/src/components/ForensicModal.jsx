@@ -5,6 +5,11 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Shield, Microscope, CheckCircle2, AlertTriangle, RefreshCw, 
+  FileText, Lock, X, Link, ExternalLink, Download, Clock,
+  FileSearch, Activity
+} from 'lucide-react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import toast from 'react-hot-toast';
 import '../styles/ForensicModal.css';
@@ -74,7 +79,7 @@ function FilePreview({ content, mimeType, label, status }) {
           <iframe src={content} title={label} />
         ) : isDataURL ? (
           <div className="binary-evidence-card">
-            <h4>🛡️ Binary Evidence Analysis</h4>
+            <h4><Shield size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} /> Binary Evidence Analysis</h4>
             <div className="binary-evidence-details">
               <p><strong>Format:</strong> <code>{mimeType || 'Unknown Binary'}</code></p>
               <p><strong>Status:</strong> {status === 'original' ? 'Blockchain Sealed' : 'Current Snapshot'}</p>
@@ -160,7 +165,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
         throw new Error(msg);
       }
       setRestored(true);
-      toast.success('✔ Integrity restored successfully');
+      toast.success('Integrity restored successfully');
       onRestored?.();
       await fetchData(); // refresh comparison after restore
     } catch (e) {
@@ -254,20 +259,20 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
             {/* Title */}
             <div className="forensic-title-block">
               <div className="forensic-title">
-                <h2>🔬 Forensic Report</h2>
+                <h2><Microscope size={22} style={{ verticalAlign: 'middle', marginRight: 10 }} /> Forensic Report</h2>
                 {isCritical && !loading && (
                   <motion.span
                     animate={{ opacity: [1, 0.5, 1] }}
                     transition={{ duration: 1.2, repeat: Infinity }}
                     className="badge badge-critical">
-                    ⚠ TAMPERING DETECTED
+                    <AlertTriangle size={12} style={{ marginRight: 4 }} /> TAMPERING DETECTED
                   </motion.span>
                 )}
                 {data?.isIdentical && !loading && (
-                  <span className="badge badge-valid">✅ IDENTICAL</span>
+                  <span className="badge badge-valid"><CheckCircle2 size={12} style={{ marginRight: 4 }} /> IDENTICAL</span>
                 )}
                 {restored && (
-                  <span className="badge badge-restored">✅ RESTORED</span>
+                  <span className="badge badge-restored"><CheckCircle2 size={12} style={{ marginRight: 4 }} /> RESTORED</span>
                 )}
               </div>
               <div className="forensic-subtitle">
@@ -281,9 +286,9 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
             {/* Tabs */}
             <div className="forensic-tabs">
               {[
-                { key: 'diff',    label: '⚡ Diff',    hidden: isBinary },
-                { key: 'preview', label: '👁 Preview' },
-                { key: 'info',    label: 'ℹ Info' },
+                { key: 'diff',    label: <span><Activity size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Diff</span>,    hidden: isBinary },
+                { key: 'preview', label: <span><FileSearch size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Preview</span> },
+                { key: 'info',    label: <span><FileText size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Info</span> },
               ].filter(t => !t.hidden).map(({ key, label }) => (
                 <button key={key}
                   className={`forensic-tab ${tab === key ? 'active' : ''}`}
@@ -294,7 +299,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
             </div>
 
             {/* Close */}
-            <button onClick={onClose} className="forensic-close">×</button>
+            <button onClick={onClose} className="forensic-close"><X size={20} /></button>
           </div>
 
           {/* ── Body ── */}
@@ -311,10 +316,10 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
             {/* ERROR */}
             {!loading && error && (
               <div className="forensic-error">
-                <div className="forensic-error-icon">⚠️</div>
+                <div className="forensic-error-icon"><AlertTriangle size={32} /></div>
                 <div className="forensic-error-message">{error}</div>
                 <button className="forensic-retry-btn" onClick={fetchData}>
-                  🔄 Retry
+                  <RefreshCw size={14} style={{ marginRight: 6 }} /> Retry
                 </button>
                 <div className="forensic-error-hint">
                   <strong>Possible causes:</strong>
@@ -335,7 +340,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                   <div className="forensic-diff-wrap">
                     {isBinary ? (
                       <div className="forensic-no-diff">
-                        <div className="forensic-no-diff-icon">📄</div>
+                        <div className="forensic-no-diff-icon"><FileText size={32} /></div>
                         <h3>Binary forensic comparison unavailable</h3>
                         <p>
                           Text diff is not available for{' '}
@@ -345,7 +350,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       </div>
                     ) : data.isIdentical ? (
                       <div className="forensic-no-diff forensic-identical">
-                        <div className="forensic-no-diff-icon">✅</div>
+                        <div className="forensic-no-diff-icon"><CheckCircle2 size={32} /></div>
                         <h3>Files Are Identical</h3>
                         <p>
                           The current file matches the original blockchain-sealed version.
@@ -433,8 +438,8 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                         compareMethod={DiffMethod.WORDS}
                         useDarkTheme={true}
                         styles={diffStyles}
-                        leftTitle="🔒 Original (Blockchain Verified)"
-                        rightTitle="⚠️ Current / Modified Version"
+                        leftTitle={<span><Lock size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} /> Original (Blockchain Verified)</span>}
+                        rightTitle={<span><AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} /> Current / Modified Version</span>}
                         hideLineNumbers={false}
                       />
                       </>
@@ -466,7 +471,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                 {tab === 'info' && (
                   <div className="forensic-info-wrap">
                     <div className="forensic-info-title">
-                      📋 File Intelligence Report
+                      <FileText size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} /> File Intelligence Report
                     </div>
 
                     {[
@@ -476,7 +481,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       { label: 'File Size',      val: data.fileSize ? `${(data.fileSize / 1024).toFixed(1)} KB` : '--' },
                       { label: 'Status',         val: data.status?.toUpperCase() },
                       { label: 'Risk Score',     val: `${data.riskScore}/100 — ${data.riskLevel}` },
-                      { label: 'Identical',      val: data.isIdentical ? '✅ Yes — No tampering' : '❌ No — Modified' },
+                      { label: 'Identical',      val: data.isIdentical ? <span style={{ color: 'var(--accent-teal)' }}><CheckCircle2 size={12} /> Yes — No tampering</span> : <span style={{ color: 'var(--accent-red)' }}><X size={12} /> No — Modified</span> },
                       { label: 'Original Hash',  val: data.originalHash },
                       { label: 'Modified Hash',  val: data.modifiedHash },
                       { label: 'TX Hash',        val: data.txHash },
@@ -495,7 +500,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                         href={`https://sepolia.etherscan.io/tx/${data.txHash}`}
                         target="_blank" rel="noreferrer"
                         className="forensic-etherscan-link">
-                        🔗 View Blockchain Proof on Etherscan ↗
+                        <Link size={14} style={{ marginRight: 6 }} /> View Blockchain Proof on Etherscan <ExternalLink size={12} style={{ marginLeft: 4 }} />
                       </a>
                     )}
                   </div>
@@ -525,7 +530,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                   whileTap={{ scale: 0.97 }}
                   onClick={handleDownloadEvidence}
                   className="btn-evidence">
-                  📥 Download Evidence
+                  <Download size={16} style={{ marginRight: 8 }} /> Download Evidence
                 </motion.button>
 
                 {/* Open Blockchain Proof */}
@@ -536,7 +541,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                     href={`https://sepolia.etherscan.io/tx/${data.txHash}`}
                     target="_blank" rel="noreferrer"
                     className="btn-blockchain">
-                    🔗 Blockchain Proof
+                    <Link size={16} style={{ marginRight: 8 }} /> Blockchain Proof
                   </motion.a>
                 )}
 
@@ -548,7 +553,8 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                     disabled={restoring}
                     onClick={handleRestore}
                     className="btn-restore">
-                    {restoring ? '⏳ Restoring...' : '🔄 Restore Original'}
+                    {restoring ? <Clock size={16} className="spin" style={{ marginRight: 8 }} /> : <RefreshCw size={16} style={{ marginRight: 8 }} />}
+                    {restoring ? 'Restoring...' : 'Restore Original'}
                   </motion.button>
                 )}
 

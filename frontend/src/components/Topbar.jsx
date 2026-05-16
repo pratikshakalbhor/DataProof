@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Settings, ExternalLink, ShieldCheck, Cpu, LogOut, Copy, Check } from 'lucide-react';
+import { Settings, ExternalLink, ShieldCheck, Cpu, LogOut, Copy, Check, Menu } from 'lucide-react';
 import NotificationDropdown from './NotificationDropdown';
 
-export default function Topbar({ pageTitle, walletAddress, onDisconnect }) {
+export default function Topbar({ pageTitle, walletAddress, onDisconnect, onMenuClick }) {
   const [showSettings, setShowSettings] = useState(false);
   const [copied, setCopied] = useState(false);
   const settingsRef = useRef(null);
@@ -26,24 +26,46 @@ export default function Topbar({ pageTitle, walletAddress, onDisconnect }) {
 
 
   return (
-    <header className="topbar" style={{ padding: '0 24px', height: '64px' }}>
+    <header className="topbar" style={{ padding: '0 20px', height: '64px', gap: 12 }}>
+      {/* Mobile Toggle */}
+      <button 
+        className="mobile-menu-btn"
+        onClick={onMenuClick}
+        style={{
+          background: 'transparent', border: 'none', color: 'var(--text-secondary)',
+          display: 'none', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', padding: 4
+        }}
+      >
+        <Menu size={20} />
+      </button>
+
       {/* Left — Breadcrumb */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ padding: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: '8px' }}>
-          <ShieldCheck size={16} color="var(--accent-cyan)" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <div className="topbar-icon" style={{ 
+          width: 18, height: 18, 
+          overflow: 'hidden', 
+          borderRadius: '3px',
+          border: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <img src="/logo.jpg" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={{ 
             fontSize: 14, 
             fontWeight: 800, 
             color: 'var(--text-primary)', 
             lineHeight: 1,
-            letterSpacing: '-0.01em'
+            letterSpacing: '-0.01em',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
           }}>
             {pageTitle}
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            ChainSeal Forensic Node
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            DataProof Forensic Node
           </div>
         </div>
       </div>
