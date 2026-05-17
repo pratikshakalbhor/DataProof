@@ -2,7 +2,6 @@ import { ethers } from 'ethers';
 
 // ─── Contract config ────────────────────────────────────────
 const CRYPTO_VAULT_ADDRESS = process.env.REACT_APP_CRYPTO_VAULT_ADDRESS;
-const FILE_REGISTRY_ADDRESS = process.env.REACT_APP_FILE_REGISTRY_ADDRESS;
 
 // ─── ABI — matches deployed CryptoVault.sol on Sepolia ──────
 const ABI = [
@@ -94,27 +93,39 @@ export const sealFileOnBlockchain = async (fileData) => {
 
 // ─── VERIFY FILE ON CHAIN ────────────────────────────────────
 // Calls verifyFile (note: this is non-view / emits event — use carefully)
-export const verifyFileOnChain = async (fileId, currentHash) => {
+export const verifyFileOnChain = async (fileHash) => {
   try {
-    if (!FILE_REGISTRY_ADDRESS) {
-      console.error("FileRegistry address missing");
-      return { success: false, valid: false };
-    }
-    const contract = await getContract(FILE_REGISTRY_ADDRESS, false);
-    // getFile is view — safe to call without gas
-    const result = await contract.getFile(fileId);
-    // result[2] is fileHash stored on chain
-    const storedHash = result[2];
+    const ADDRESS = process.env.REACT_APP_CONTRACT_ADDRESS
+                 || '0x63B97B3a93B386aD8e4d32FE25361EdAD1F1a37b';
+
+    const ABI = [
+      "function verifyFile(string calldata fileHash) external view returns (bool valid, address owner, uint256 ts)",
+      "function fileExists(string calldata fileHash) external view returns (bool)"
+    ];
+
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const contract = new ethers.Contract(ADDRESS, ABI, provider);
+
+    // ✅ Hash normalize — 0x prefix remove
+    const hash = fileHash.replace(/^0x/, '').toLowerCase();
+
+    const [valid, owner, timestamp] = await contract.verifyFile(hash);
+
     return {
-      success: true,
-      valid:   storedHash?.toLowerCase() === currentHash?.toLowerCase(),
-      owner:   result[6],
-      timestamp: Number(result[4]) > 0
-        ? new Date(Number(result[4]) * 1000).toLocaleString()
+      success:   true,
+      valid,
+      owner,
+      timestamp: Number(timestamp) > 0
+        ? new Date(Number(timestamp) * 1000).toLocaleString()
         : null,
     };
-  } catch (e) {
-    console.warn('[blockchain] verifyFileOnChain error:', e.message);
-    return { success: false, valid: false };
+  } catch (err) {
+    // ✅ Silent fail — blockchain error verify block karat nahi
+    console.warn('[blockchain] verifyFileOnChain error:', err.message);
+    return {
+      success: false,
+      valid:   false,
+      error:   err.message,
+    };
   }
 };

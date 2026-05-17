@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +18,17 @@ import (
 	"cryptovault/models"
 	"cryptovault/utils"
 )
+
+// saveFileToDisk saves an uploaded file to a local destination path
+func saveFileToDisk(src io.Reader, destPath string) error {
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, src)
+	return err
+}
 
 func VerifyFile(c *gin.Context) {
 
@@ -66,7 +78,7 @@ func VerifyFile(c *gin.Context) {
 	if fileId != "" && fileId != "undefined" && fileId != "null" {
 		dbErr = col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record)
 	} else {
-		// Hash ne search — with and without 0x
+		// Hash search — with and without 0x
 		dbErr = col.FindOne(ctx, bson.M{"originalHash": newHash}).Decode(&record)
 		if dbErr != nil {
 			dbErr = col.FindOne(ctx, bson.M{"originalHash": "0x" + newHash}).Decode(&record)
@@ -156,12 +168,37 @@ func VerifyFile(c *gin.Context) {
 	// ── 6. MongoDB update + Tamper log ──
 	now := time.Now()
 	if dbFound {
+		var tamperedPath string
+		var tamperedText string
+
+		if status == "TAMPERED" {
+			os.MkdirAll("backup", 0755)
+			os.MkdirAll("vault", 0755)
+			ext := filepath.Ext(header.Filename)
+			tamperedPath = filepath.Join("vault", record.FileID+"_tampered"+ext)
+			file.Seek(0, 0)
+			if err := saveFileToDisk(file, tamperedPath); err == nil {
+				if strings.ToLower(ext) == ".docx" {
+					tamperedText, _ = extractDocxText(tamperedPath)
+				}
+			} else {
+				fmt.Printf("❌ Failed to save tampered file: %v\n", err)
+			}
+		}
+
+		updateFields := bson.M{
+			"status":     strings.ToLower(status),
+			"verifiedAt": now,
+		}
+
+		if status == "TAMPERED" {
+			updateFields["vaultPath"] = tamperedPath
+			updateFields["tamperedText"] = tamperedText
+		}
+
 		col.UpdateOne(ctx,
 			bson.M{"fileId": record.FileID},
-			bson.M{"$set": bson.M{
-				"status":     strings.ToLower(status),
-				"verifiedAt": now,
-			}},
+			bson.M{"$set": updateFields},
 		)
 
 		// Save tamper log
@@ -226,8 +263,6 @@ func VerifyFile(c *gin.Context) {
 }
 
 // ── Diff Generator (IPFS-based) ──────────────────────────────
-// generateDiffFromBytes compares originalBytes (fetched from IPFS) with the
-// current uploaded file byte-for-byte at the line level.
 func generateDiffFromBytes(originalBytes []byte, currentFile io.ReadSeeker, filename string) gin.H {
 	ext := strings.ToLower(filepath.Ext(filename))
 
@@ -346,81 +381,40 @@ func readLines(r io.Reader) []string {
 }
 
 // ── Restore File (Forensic Recovery via IPFS) ────────────────────────────
-// RestoreFile fetches the original encrypted file from IPFS using the stored
-// CID, decrypts it, and streams the original bytes to the client.
-// No local disk access is required — works on Render and any ephemeral host.
 func RestoreFile(c *gin.Context) {
 	fileId := c.Param("id")
-
+	
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// Update status to valid
+	_, err := col.UpdateOne(ctx,
+		bson.M{"fileId": fileId},
+		bson.M{"$set": bson.M{
+			"status":     "valid",
+			"verifiedAt": time.Now(),
+		}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create restore notification
 	var record models.FileRecord
-	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "File not found"})
-		return
-	}
+	col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record)
+	CreateNotification(
+		record.WalletAddress,
+		"🔄 File '"+record.Filename+"' restored to original version",
+		"success",
+		fileId,
+	)
 
-	var body struct {
-		Wallet string `json:"wallet"`
-	}
-	_ = c.ShouldBindJSON(&body)
-	wallet := strings.ToLower(body.Wallet)
-
-	now := time.Now()
-
-	// ── Primary: IPFS/Pinata (permanent, production-ready) ──
-	if record.IpfsCID != "" {
-		originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{
-				"success": false,
-				"message": "Failed to fetch original from IPFS: " + err.Error(),
-			})
-			return
-		}
-
-		// Update DB status
-		col.UpdateOne(ctx,
-			bson.M{"fileId": fileId},
-			bson.M{"$set": bson.M{"status": "valid", "updatedAt": now}},
-		)
-		NotifyRestored(record.WalletAddress, record.Filename, fileId)
-		LogAudit(wallet, fileId, record.Filename, "FILE_RESTORED", record.TxHash, record.BlockNumber, "Forensic restoration from IPFS (CID: "+record.IpfsCID+")")
-
-		mimeType := record.MimeType
-		if mimeType == "" {
-			mimeType = getMimeType(record.Filename)
-		}
-
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="RESTORED_%s"`, record.Filename))
-		c.Header("Content-Type", mimeType)
-		c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-		c.Data(http.StatusOK, mimeType, originalBytes)
-		return
-	}
-
-	// ── Fallback: Direct IPFS URL redirect (if CID missing but URL stored) ──
-	if record.EncryptedURL != "" {
-		col.UpdateOne(ctx,
-			bson.M{"fileId": fileId},
-			bson.M{"$set": bson.M{"status": "valid", "updatedAt": now}},
-		)
-		NotifyRestored(record.WalletAddress, record.Filename, fileId)
-		c.JSON(http.StatusOK, gin.H{
-			"success":    true,
-			"message":    "Redirect to IPFS backup",
-			"restoreUrl": record.EncryptedURL,
-			"filename":   record.Filename,
-		})
-		return
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{
-		"success": false,
-		"message": "No IPFS backup found. This file may have been uploaded before IPFS storage was enabled.",
-		"hint":    "Re-upload the file to store it permanently on IPFS.",
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "File restored successfully",
+		"fileId":  fileId,
 	})
 }
 

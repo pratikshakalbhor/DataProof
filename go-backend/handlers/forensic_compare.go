@@ -1,33 +1,26 @@
 package handlers
 
 import (
-	"bytes"
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"code.sajari.com/docconv"
 	"github.com/gin-gonic/gin"
-	"github.com/ledongthuc/pdf"
 	"go.mongodb.org/mongo-driver/bson"
 
 	"cryptovault/database"
 	"cryptovault/models"
-	"cryptovault/utils"
 )
-
-// ──────────────────────────────────────────────────────────
-// helpers
-// ──────────────────────────────────────────────────────────
 
 // sha256Hex returns the lowercase hex-encoded SHA-256 of the given bytes.
 func sha256Hex(data []byte) string {
@@ -57,9 +50,6 @@ func riskScore(a, b []byte) int {
 	if sha256Hex(a) == sha256Hex(b) {
 		return 0
 	}
-	// Rough Levenshtein on lines would be expensive for large files.
-	// Use a quick approximation: percentage of differing bytes in the
-	// shorter slice + any length difference contribution.
 	maxLen := len(a)
 	if len(b) > maxLen {
 		maxLen = len(b)
@@ -75,11 +65,9 @@ func riskScore(a, b []byte) int {
 			diffBytes++
 		}
 	}
-	// Count the extra bytes in the longer file as fully different
 	diffBytes += (maxLen - minLen)
 
 	score := int(float64(diffBytes) / float64(maxLen) * 100)
-	// Clamp
 	if score < 5 && sha256Hex(a) != sha256Hex(b) {
 		score = 5 // minimum non-zero for "tampered"
 	}
@@ -108,109 +96,63 @@ func riskLevel(score int) string {
 // detectMime returns a best-effort MIME type from the file extension.
 func detectMime(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		switch ext {
-		case ".docx":
-			mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-		case ".xlsx":
-			mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-		case ".pptx":
-			mimeType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-		case ".md":
-			mimeType = "text/markdown"
-		default:
-			mimeType = "application/octet-stream"
-		}
+	switch ext {
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".pdf":
+		return "application/pdf"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".txt":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".csv":
+		return "text/csv"
+	case ".md":
+		return "text/markdown"
+	case ".go":
+		return "text/x-go"
+	case ".py":
+		return "text/x-python"
+	default:
+		return "application/octet-stream"
 	}
-	return mimeType
 }
 
-// findFile searches several candidate paths when the stored path is stale or
-// missing. It returns the first path that exists on disk, or "" if none do.
-func findFile(storedPath, fileId, filename, subdir string) string {
-	// Resolve the current working directory once for building relative paths.
-	cwd, _ := filepath.Abs(".")
-
-	candidates := []string{}
-
-	// 1. Exact stored absolute path (most reliable for new uploads)
-	if storedPath != "" {
-		candidates = append(candidates, storedPath)
-		// Also try it relative to cwd in case it was stored as relative
-		if !filepath.IsAbs(storedPath) {
-			candidates = append(candidates, filepath.Join(cwd, storedPath))
+// extractDocxText extracts plain text from a docx file using standard archive/zip
+func extractDocxText(filePath string) (string, error) {
+	r, err := zip.OpenReader(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.Name == "word/document.xml" {
+			rc, _ := f.Open()
+			defer rc.Close()
+			data, _ := io.ReadAll(rc)
+			re := regexp.MustCompile(`<[^>]+>`)
+			text := re.ReplaceAllString(string(data), " ")
+			re2 := regexp.MustCompile(`\s+`)
+			text = re2.ReplaceAllString(text, " ")
+			return strings.TrimSpace(text), nil
 		}
 	}
-
-	// 2. Standard pattern: <subdir>/<fileId>_<cleanedFilename> relative to cwd
-	if filename != "" {
-		cleanName := strings.ReplaceAll(filename, " ", "_")
-		safeFile := fileId + "_" + cleanName
-		candidates = append(candidates,
-			filepath.Join(cwd, subdir, safeFile),
-			filepath.Join(cwd, "vault", safeFile),
-			filepath.Join(cwd, "backup", safeFile),
-		)
-	}
-
-	// 3. Legacy internal/storage pattern
-	if filename != "" {
-		ext := filepath.Ext(filename)
-		candidates = append(candidates,
-			filepath.Join(cwd, "internal", "storage", subdir, fileId+ext),
-		)
-	}
-
-	fmt.Printf("[findFile] subdir=%s fileId=%s — checking %d candidates\n", subdir, fileId, len(candidates))
-	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			continue
-		}
-		if _, statErr := os.Stat(abs); statErr == nil {
-			fmt.Printf("[findFile] ✅ FOUND: %s\n", abs)
-			return abs
-		}
-		fmt.Printf("[findFile] ❌ not found: %s\n", abs)
-	}
-
-	// 4. Last resort: scan the subdir for any file whose name starts with fileId
-	scanDirs := []string{
-		filepath.Join(cwd, subdir),
-		filepath.Join(cwd, "backup"),
-		filepath.Join(cwd, "vault"),
-	}
-	for _, dir := range scanDirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasPrefix(e.Name(), fileId) {
-				found := filepath.Join(dir, e.Name())
-				fmt.Printf("[findFile] ✅ SCANNED FOUND: %s\n", found)
-				return found
-			}
-		}
-	}
-
-	fmt.Printf("[findFile] ❌ No file found for fileId=%s subdir=%s\n", fileId, subdir)
-	return ""
+	return "", fmt.Errorf("word/document.xml not found in docx")
 }
 
-// ──────────────────────────────────────────────────────────
 // ForensicCompare — GET /api/file/forensic-compare/:fileId
-// ──────────────────────────────────────────────────────────
 func ForensicCompare(c *gin.Context) {
 	fileId := c.Param("fileId")
-	fmt.Printf("\n[FORENSIC] ────────────────────────────────────────\n")
-	fmt.Printf("[FORENSIC] Comparison requested for fileId: %s\n", fileId)
 
-	// 1. Fetch MongoDB record
+	// 1. Find file record from MongoDB by fileId
 	col := database.GetCollection("files")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -218,239 +160,209 @@ func ForensicCompare(c *gin.Context) {
 	var record models.FileRecord
 	err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record)
 	if err != nil {
-		fmt.Printf("[FORENSIC] ❌ File not found in MongoDB: %v\n", err)
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"error":   "File record not found",
-			"fileId":  fileId,
-		})
-		return
-	}
-	fmt.Printf("[FORENSIC] ✅ MongoDB record found: %s | backupPath=%s | vaultPath=%s\n",
-		record.Filename, record.BackupPath, record.VaultPath)
-
-	// 2. Fetch original file from IPFS (primary permanent storage)
-	if record.IpfsCID == "" {
-		fmt.Printf("[FORENSIC] ❌ No IPFS CID stored for fileId: %s\n", fileId)
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   "No IPFS CID found for this file. Re-upload to enable forensic analysis.",
-			"fileId":  fileId,
+			"error":   "File record not found in MongoDB",
 		})
 		return
 	}
 
-	fmt.Printf("[FORENSIC] 📡 Fetching original from IPFS CID: %s\n", record.IpfsCID)
-	originalData, err := utils.FetchFromIPFS(record.IpfsCID)
-	if err != nil {
-		fmt.Printf("[FORENSIC] ❌ IPFS fetch failed: %v\n", err)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"success": false,
-			"error":   "Failed to retrieve original file from IPFS: " + err.Error(),
-			"fileId":  fileId,
-			"hint":    "IPFS gateway may be temporarily unavailable. Try again shortly.",
-		})
-		return
+	// 2. Get file extension from filename
+	ext := filepath.Ext(record.Filename)
+	extLower := strings.ToLower(ext)
+
+	// 3. Search backup/ folder for original file
+	foundBackup := ""
+	if record.BackupPath != "" {
+		if _, err := os.Stat(record.BackupPath); err == nil {
+			foundBackup = record.BackupPath
+		}
 	}
-	fmt.Printf("[FORENSIC] ✅ IPFS fetch SUCCESS — %d bytes\n", len(originalData))
-
-	// 3. Tampered/vault copy — use original as fallback (no local vault)
-	// In production, tamperedData would come from the file the user uploads for comparison.
-	// For now, we compare IPFS original with itself (identical unless re-uploaded).
-	tamperedData := originalData
-	tamperedMissing := true
-	fmt.Printf("[FORENSIC] ⚠️  No separate tampered copy — using original for baseline comparison\n")
-
-	// 5. Forensic analysis
-	origHash := sha256Hex(originalData)
-	tampHash := sha256Hex(tamperedData)
-	isIdentical := origHash == tampHash
-
-	score := 0
-	if !isIdentical {
-		score = riskScore(originalData, tamperedData)
+	if foundBackup == "" {
+		p1 := filepath.Join("backup", fileId+ext)
+		if _, err := os.Stat(p1); err == nil {
+			foundBackup = p1
+		}
 	}
-	level := riskLevel(score)
-
-	fileStatus := record.Status
-	if fileStatus == "" {
-		if isIdentical {
-			fileStatus = "valid"
-		} else {
-			fileStatus = "tampered"
+	if foundBackup == "" {
+		p2 := filepath.Join("backup", fileId+"_original"+ext)
+		if _, err := os.Stat(p2); err == nil {
+			foundBackup = p2
 		}
 	}
 
-	// 6. Determine MIME / text vs binary
+	// 4. Search vault/ folder for tampered file
+	foundVault := ""
+	if record.VaultPath != "" {
+		if _, err := os.Stat(record.VaultPath); err == nil {
+			foundVault = record.VaultPath
+		}
+	}
+	if foundVault == "" {
+		p1 := filepath.Join("vault", fileId+ext)
+		if _, err := os.Stat(p1); err == nil {
+			foundVault = p1
+		}
+	}
+	if foundVault == "" {
+		p2 := filepath.Join("vault", fileId+"_tampered"+ext)
+		if _, err := os.Stat(p2); err == nil {
+			foundVault = p2
+		}
+	}
+
 	mimeType := record.MimeType
 	if mimeType == "" {
 		mimeType = detectMime(record.Filename)
 	}
 
-	// Step 4: Extension-based text diff support
-	ext := strings.ToLower(filepath.Ext(record.Filename))
-	textExts := map[string]bool{
-		".txt": true, ".md": true, ".json": true, ".js": true,
-		".ts": true, ".html": true, ".css": true, ".go": true,
-		".java": true, ".py": true,
+	// Add fmt.Println debug logs
+	fmt.Println("[ForensicCompare] fileId:", fileId)
+	fmt.Println("[ForensicCompare] backupPath found:", foundBackup)
+	fmt.Println("[ForensicCompare] vaultPath found:", foundVault)
+	fmt.Println("[ForensicCompare] mimeType:", mimeType)
+
+	var backupBytes []byte
+	if foundBackup != "" {
+		backupBytes, _ = os.ReadFile(foundBackup)
 	}
-	
-	// A file is comparable if it's in the allowed list AND is valid text
-	isText := textExts[ext] && isTextContent(originalData)
-	isBinary := !isText
 
+	var vaultBytes []byte
+	if foundVault != "" {
+		vaultBytes, _ = os.ReadFile(foundVault)
+	}
 
-	// 7. Build content fields
-	//    • For text files: return decoded UTF-8 strings (for diff viewer)
-	//    • For binary files: return base64-encoded data-URL (for preview)
-	//    • For docx: extract text and treat as text for diff viewer
+	// If tampered file was not found, we can use backupBytes as fallback so we don't return completely empty
+	if len(vaultBytes) == 0 && len(backupBytes) > 0 {
+		vaultBytes = backupBytes
+	}
+
 	var originalContent, modifiedContent string
+	var isBinary, isTextComparable bool
 
-	if ext == ".docx" {
-		resOrig, errOrig := docconv.Convert(bytes.NewReader(originalData), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", true)
-		resTamp, errTamp := docconv.Convert(bytes.NewReader(tamperedData), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", true)
-		if errOrig == nil && errTamp == nil {
-			originalContent = resOrig.Body
-			modifiedContent = resTamp.Body
-			isText = true
+	isBinary = true
+	isTextComparable = false
+
+	switch extLower {
+	case ".docx":
+		origText, errOrig := extractDocxText(foundBackup)
+		modText, errMod := extractDocxText(foundVault)
+		if errOrig == nil && errMod == nil {
+			originalContent = origText
+			modifiedContent = modText
 			isBinary = false
+			isTextComparable = true
 		} else {
-			// Fallback to binary preview if extraction fails
-			isText = false
-			isBinary = true
-			b64Orig := base64.StdEncoding.EncodeToString(originalData)
-			b64Tamp := base64.StdEncoding.EncodeToString(tamperedData)
-			originalContent = "data:" + mimeType + ";base64," + b64Orig
-			modifiedContent = "data:" + mimeType + ";base64," + b64Tamp
-		}
-	} else if ext == ".pdf" {
-		pdfR1, err1 := pdf.NewReader(bytes.NewReader(originalData), int64(len(originalData)))
-		pdfR2, err2 := pdf.NewReader(bytes.NewReader(tamperedData), int64(len(tamperedData)))
-		if err1 == nil && err2 == nil {
-			pt1, errPt1 := pdfR1.GetPlainText()
-			pt2, errPt2 := pdfR2.GetPlainText()
-			if errPt1 == nil && errPt2 == nil {
-				b1, _ := io.ReadAll(pt1)
-				b2, _ := io.ReadAll(pt2)
-				originalContent = string(b1)
-				modifiedContent = string(b2)
-				isText = true
+			// Check if we already have it extracted in DB
+			if record.ExtractedText != "" {
+				originalContent = record.ExtractedText
+				modifiedContent = record.TamperedText
+				if modifiedContent == "" {
+					modifiedContent = originalContent
+				}
 				isBinary = false
+				isTextComparable = true
 			} else {
-				// Fallback to binary preview
-				isText = false
+				// Fallback to base64 so mammoth can extract in browser
+				originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+				modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(vaultBytes)
 				isBinary = true
-				b64Orig := base64.StdEncoding.EncodeToString(originalData)
-				b64Tamp := base64.StdEncoding.EncodeToString(tamperedData)
-				originalContent = "data:" + mimeType + ";base64," + b64Orig
-				modifiedContent = "data:" + mimeType + ";base64," + b64Tamp
+				isTextComparable = true
 			}
+		}
+	case ".txt", ".json", ".csv", ".md", ".go", ".py":
+		originalContent = string(backupBytes)
+		modifiedContent = string(vaultBytes)
+		isBinary = false
+		isTextComparable = true
+	case ".pdf", ".png", ".jpg", ".jpeg":
+		originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+		modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(vaultBytes)
+		isBinary = true
+		isTextComparable = false
+	default:
+		if isTextContent(backupBytes) {
+			originalContent = string(backupBytes)
+			modifiedContent = string(vaultBytes)
+			isBinary = false
+			isTextComparable = true
 		} else {
-			// Fallback to binary preview
-			isText = false
+			originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+			modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(vaultBytes)
 			isBinary = true
-			b64Orig := base64.StdEncoding.EncodeToString(originalData)
-			b64Tamp := base64.StdEncoding.EncodeToString(tamperedData)
-			originalContent = "data:" + mimeType + ";base64," + b64Orig
-			modifiedContent = "data:" + mimeType + ";base64," + b64Tamp
+			isTextComparable = false
 		}
-	} else if isText {
-		originalContent = string(originalData)
-		modifiedContent = string(tamperedData)
+	}
+
+	origHash := ""
+	if len(backupBytes) > 0 {
+		origHash = sha256Hex(backupBytes)
 	} else {
-		// Binary: wrap as data-URL so the preview pane can render images/PDFs
-		b64Orig := base64.StdEncoding.EncodeToString(originalData)
-		b64Tamp := base64.StdEncoding.EncodeToString(tamperedData)
-		originalContent = "data:" + mimeType + ";base64," + b64Orig
-		modifiedContent = "data:" + mimeType + ";base64," + b64Tamp
+		origHash = record.OriginalHash
 	}
 
-	// Also always provide raw base64 fields for download evidence
-	b64Orig := base64.StdEncoding.EncodeToString(originalData)
-	b64Tamp := base64.StdEncoding.EncodeToString(tamperedData)
+	tampHash := ""
+	if len(vaultBytes) > 0 {
+		tampHash = sha256Hex(vaultBytes)
+	} else {
+		tampHash = origHash
+	}
 
-	fmt.Printf("[FORENSIC] ✅ Analysis complete — identical=%v score=%d level=%s text=%v\n",
-		isIdentical, score, level, isText)
+	score := riskScore(backupBytes, vaultBytes)
+	level := riskLevel(score)
 
-	var changes []map[string]interface{}
-
-	if isText && !isIdentical {
-		origLines := strings.Split(originalContent, "\n")
-		tampLines := strings.Split(modifiedContent, "\n")
-		
-		maxLines := len(origLines)
-		if len(tampLines) > maxLines { maxLines = len(tampLines) }
-		
-		for i := 0; i < maxLines && len(changes) < 50; i++ {
-			orig := ""
-			tamp := ""
-			if i < len(origLines) { orig = origLines[i] }
-			if i < len(tampLines) { tamp = tampLines[i] }
-			
-			if orig == tamp { continue }
-			
-			changeType := "modified"
-			if orig == "" { changeType = "added" }
-			if tamp == "" { changeType = "removed" }
-			
-			changes = append(changes, map[string]interface{}{
-				"line":   i + 1,
-				"type":   changeType,
-				"before": orig,
-				"after":  tamp,
-			})
+	status := record.Status
+	if status == "" || status == "valid" {
+		if origHash != tampHash {
+			status = "tampered"
+		} else {
+			status = "valid"
 		}
 	}
 
+	// 8. Return JSON
 	c.JSON(http.StatusOK, gin.H{
-		// Content for diff/preview panels
-		"original":         originalContent,
-		"modified":         modifiedContent,
-		// Raw base64 for "Download Evidence" button
-		"originalBase64":   b64Orig,
-		"modifiedBase64":   b64Tamp,
-		// Hashes
-		"originalHash":     origHash,
-		"modifiedHash":     tampHash,
-		// File metadata
-		"fileId":           fileId,
+		"success":          true,
+		"fileId":           record.FileID,
+		"filename":         record.Filename,
 		"fileName":         record.Filename,
 		"mimeType":         mimeType,
-		"fileSize":         record.FileSize,
-		"walletAddress":    record.WalletAddress,
+		"original":         originalContent,
+		"modified":         modifiedContent,
+		"originalHash":     origHash,
+		"modifiedHash":     tampHash,
 		"txHash":           record.TxHash,
-		"uploadedAt":       record.UploadedAt,
-		// Status
-		"status":           fileStatus,
-		"isIdentical":      isIdentical,
-		"tamperedMissing":  tamperedMissing,
-		// Forensic scores
+		"status":           status,
 		"riskScore":        score,
 		"riskLevel":        level,
-		// Diff capability flags
-		"isTextComparable": isText,
 		"isBinary":         isBinary,
-		// Changes
-		"changes": changes,
-		"changeSummary": map[string]interface{}{
-			"totalChanges": len(changes),
-			"hasChanges":   len(changes) > 0,
-		},
+		"isTextComparable": isTextComparable,
+		"walletAddress":    record.WalletAddress,
+		"uploadedAt":       record.UploadedAt,
+		"fileSize":         record.FileSize,
+		"isIdentical":      origHash == tampHash,
 	})
 }
 
-// ──────────────────────────────────────────────────────────
-// ForensicRestore — POST /api/restore/:fileId
-// Fetches the sealed original from IPFS, decrypts, and streams to client.
-// Works on Render and any ephemeral deployment — no local disk required.
-// ──────────────────────────────────────────────────────────
-func ForensicRestore(c *gin.Context) {
+// ForensicCompareWithUpload — POST /api/file/forensic-compare/:fileId
+func ForensicCompareWithUpload(c *gin.Context) {
 	fileId := c.Param("fileId")
-	fmt.Printf("\n[RESTORE] ────────────────────────────────────────\n")
-	fmt.Printf("[RESTORE] Recovery initiated for fileId: %s\n", fileId)
+
+	uploadedFile, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded for comparison"})
+		return
+	}
+	defer uploadedFile.Close()
+
+	tamperedData, err := io.ReadAll(uploadedFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read uploaded file"})
+		return
+	}
 
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -459,51 +371,139 @@ func ForensicRestore(c *gin.Context) {
 		return
 	}
 
-	if record.IpfsCID == "" {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "No IPFS CID found for this file. Cannot restore.",
-			"hint":  "Re-upload the file to store it permanently on IPFS.",
-		})
+	ext := strings.ToLower(filepath.Ext(record.Filename))
+	mimeType := detectMime(record.Filename)
+
+	var backupBytes []byte
+	if record.BackupPath != "" {
+		backupBytes, _ = os.ReadFile(record.BackupPath)
+	}
+
+	if len(backupBytes) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Original backup file not found on disk"})
 		return
 	}
 
-	// Fetch and decrypt original from IPFS
-	fmt.Printf("[RESTORE] 📡 Fetching from IPFS CID: %s\n", record.IpfsCID)
-	originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
-	if err != nil {
-		fmt.Printf("[RESTORE] ❌ IPFS fetch failed: %v\n", err)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": "Failed to retrieve original from IPFS: " + err.Error(),
-			"hint":  "IPFS gateway may be temporarily unavailable. Try again shortly.",
-		})
+	origHash := sha256Hex(backupBytes)
+	tampHash := sha256Hex(tamperedData)
+
+	score := riskScore(backupBytes, tamperedData)
+	level := riskLevel(score)
+
+	var originalContent, modifiedContent string
+	var isBinary, isTextComparable bool
+
+	isBinary = true
+	isTextComparable = false
+
+	switch ext {
+	case ".docx":
+		// Save the uploaded tampered file temporarily to do extraction
+		os.MkdirAll("vault", 0755)
+		tamperedTempPath := filepath.Join("vault", fileId+"_temp_compare.docx")
+		os.WriteFile(tamperedTempPath, tamperedData, 0644)
+		defer os.Remove(tamperedTempPath)
+
+		origText, errOrig := extractDocxText(record.BackupPath)
+		modText, errMod := extractDocxText(tamperedTempPath)
+
+		if errOrig == nil && errMod == nil {
+			originalContent = origText
+			modifiedContent = modText
+			isBinary = false
+			isTextComparable = true
+		} else {
+			originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+			modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(tamperedData)
+			isBinary = true
+			isTextComparable = true
+		}
+	case ".txt", ".json", ".csv", ".md", ".go", ".py":
+		originalContent = string(backupBytes)
+		modifiedContent = string(tamperedData)
+		isBinary = false
+		isTextComparable = true
+	case ".pdf", ".png", ".jpg", ".jpeg":
+		originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+		modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(tamperedData)
+		isBinary = true
+		isTextComparable = false
+	default:
+		if isTextContent(backupBytes) {
+			originalContent = string(backupBytes)
+			modifiedContent = string(tamperedData)
+			isBinary = false
+			isTextComparable = true
+		} else {
+			originalContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(backupBytes)
+			modifiedContent = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(tamperedData)
+			isBinary = true
+			isTextComparable = false
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":          true,
+		"fileId":           record.FileID,
+		"filename":         record.Filename,
+		"fileName":         record.Filename,
+		"mimeType":         mimeType,
+		"original":         originalContent,
+		"modified":         modifiedContent,
+		"originalHash":     origHash,
+		"modifiedHash":     tampHash,
+		"txHash":           record.TxHash,
+		"status":           "tampered",
+		"riskScore":        score,
+		"riskLevel":        level,
+		"isBinary":         isBinary,
+		"isTextComparable": isTextComparable,
+		"walletAddress":    record.WalletAddress,
+		"uploadedAt":       record.UploadedAt,
+		"fileSize":         record.FileSize,
+		"isIdentical":      origHash == tampHash,
+	})
+}
+
+// ForensicRestore — POST /api/restore/:fileId
+func ForensicRestore(c *gin.Context) {
+	fileId := c.Param("fileId")
+
+	col := database.GetCollection("files")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var record models.FileRecord
+	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File record not found"})
 		return
 	}
 
-	// Update status in MongoDB
+	var backupBytes []byte
+	if record.BackupPath != "" {
+		backupBytes, _ = os.ReadFile(record.BackupPath)
+	}
+
+	if len(backupBytes) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Original backup file not found on disk"})
+		return
+	}
+
 	now := time.Now()
 	_, _ = col.UpdateOne(ctx, bson.M{"fileId": fileId}, bson.M{
 		"$set": bson.M{
-			"status":     "valid",
-			"updatedAt":  now,
-			"restoredAt": now,
-			"tampered":   false,
+			"status":    "valid",
+			"updatedAt": now,
 		},
 	})
-
-	// Audit log
-	LogAudit(record.WalletAddress, fileId, record.Filename, "FILE_RESTORED",
-		record.TxHash, 0, fmt.Sprintf("Forensic IPFS restore: %d bytes | CID: %s", len(originalBytes), record.IpfsCID))
 
 	mimeType := record.MimeType
 	if mimeType == "" {
 		mimeType = detectMime(record.Filename)
 	}
 
-	fmt.Printf("[RESTORE] ✅ Streaming %d bytes → client (MIME: %s)\n", len(originalBytes), mimeType)
-
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="RESTORED_%s"`, record.Filename))
 	c.Header("Content-Type", mimeType)
 	c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-	c.Data(http.StatusOK, mimeType, originalBytes)
+	c.Data(http.StatusOK, mimeType, backupBytes)
 }
-

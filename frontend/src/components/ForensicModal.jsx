@@ -7,13 +7,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Shield, Microscope, CheckCircle2, AlertTriangle, RefreshCw,
-  FileText, Lock, X, Link, ExternalLink, Download, Clock,
+  FileText, X, Link, ExternalLink, Download, Clock,
   FileSearch, Activity, ShieldCheck, ShieldAlert, RotateCcw
 } from 'lucide-react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
+import mammoth from 'mammoth';
 import '../styles/ForensicModal.css';
 
-const API = (process.env.REACT_APP_API_URL || 'http://localhost:5000').replace(/\/api\/?$/, '') + '/api';
+const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /* ─── Risk Score Ring ─────────────────────────────────────── */
 function RiskRing({ score, level }) {
@@ -42,7 +43,6 @@ function RiskRing({ score, level }) {
 
 /* ─── Text Preview Pane ───────────────────────────────────── */
 function TextPreviewPane({ content, label, side }) {
-  // Never show base64 / binary data — only readable text
   const isBinaryOrEncoded =
     !content ||
     content.startsWith('data:') ||
@@ -126,6 +126,10 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
   const [restoring, setRestoring] = useState(false);
   const [restored,  setRestored]  = useState(false);
 
+  const [origText, setOrigText] = useState('');
+  const [modText,  setModText]  = useState('');
+  const [extracting, setExtracting] = useState(false);
+
   /* ── Fetch forensic comparison data ── */
   const fetchData = useCallback(async () => {
     if (!fileId) { setError('No file ID provided'); setLoading(false); return; }
@@ -140,7 +144,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
       const json = await res.json();
       setData(json);
       // Binary files — go to preview tab; text files — diff tab
-      if (json.isBinary) setTab('preview');
+      if (json.isBinary && !json.filename?.endsWith('.docx')) setTab('preview');
     } catch (e) {
       setError(e.message || 'Failed to load forensic data');
     } finally {
@@ -150,11 +154,55 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  /* ── mammoth text extraction ── */
+  useEffect(() => {
+    if (!data) return;
+    
+    const isDocx = data.mimeType?.includes('wordprocessingml') ||
+                   data.filename?.endsWith('.docx');
+    
+    if (isDocx && data.isBinary) {
+      // Use mammoth to extract text in browser
+      setExtracting(true);
+      
+      const extractText = async (base64DataURL) => {
+        if (!base64DataURL) return '';
+        // Handle case if data URL doesn't have a comma, or is raw base64
+        const parts = base64DataURL.split(',');
+        const base64 = parts.length > 1 ? parts[1] : parts[0];
+        const binary = atob(base64);
+        const bytes  = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const result = await mammoth.extractRawText({
+          arrayBuffer: bytes.buffer
+        });
+        return result.value;
+      };
+      
+      Promise.all([
+        extractText(data.original),
+        extractText(data.modified),
+      ]).then(([orig, mod]) => {
+        setOrigText(orig);
+        setModText(mod);
+        setExtracting(false);
+      }).catch(err => {
+        console.error('mammoth error:', err);
+        setExtracting(false);
+      });
+    } else {
+      // Already plain text
+      setOrigText(data.original || '');
+      setModText(data.modified  || '');
+    }
+  }, [data]);
+
   /* ── Restore: overwrite vault with backup, then download RESTORED_ file ── */
   const handleRestore = async () => {
     setRestoring(true);
     try {
-      // 1. Tell backend to restore vault copy from backup
       const res = await fetch(`${API}/restore/${encodeURIComponent(fileId)}`, { method: 'POST' });
       if (!res.ok) {
         let msg = `HTTP ${res.status}`;
@@ -162,7 +210,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
         throw new Error(msg);
       }
 
-      // 2. Download the restored original — named RESTORED_<filename>
+      // Download the restored original — named RESTORED_<filename>
       const originalName = data?.fileName || filename || 'file';
       const downloadName = `RESTORED_${originalName}`;
 
@@ -218,36 +266,12 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
     URL.revokeObjectURL(url);
   };
 
-  /* ── Diff viewer theme ── */
-  const diffStyles = {
-    variables: {
-      dark: {
-        diffViewerBackground:      '#0a0e17',
-        diffViewerColor:           '#e2e8f0',
-        addedBackground:           'rgba(20,184,166,0.12)',
-        addedColor:                '#d1fae5',
-        removedBackground:         'rgba(239,68,68,0.12)',
-        removedColor:              '#fecaca',
-        wordAddedBackground:       'rgba(20,184,166,0.38)',
-        wordRemovedBackground:     'rgba(239,68,68,0.38)',
-        addedGutterBackground:     'rgba(20,184,166,0.2)',
-        removedGutterBackground:   'rgba(239,68,68,0.2)',
-        gutterBackground:          '#070b12',
-        gutterColor:               '#475569',
-        codeFoldBackground:        '#0f1623',
-        codeFoldGutterBackground:  '#0f1623',
-        codeFoldContentColor:      '#64748b',
-        emptyLineBackground:       '#070b12',
-        highlightBackground:       'rgba(245,158,11,0.12)',
-        highlightGutterBackground: 'rgba(245,158,11,0.2)',
-      },
-    },
-    line:   { fontFamily: 'monospace', fontSize: '12px' },
-    gutter: { minWidth: '40px' },
-  };
+  const isDocx = data?.mimeType?.includes('wordprocessingml') ||
+                 data?.filename?.endsWith('.docx') ||
+                 data?.fileName?.endsWith('.docx');
 
   const isCritical  = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
-  const isBinary    = data?.isBinary;
+  const isBinary    = data?.isBinary && !isDocx;
   const canRestore  = (data?.status === 'tampered' || !data?.isIdentical) && !restored;
   const origName    = data?.fileName || filename || fileId;
 
@@ -364,75 +388,57 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                 {/* ── DIFF TAB ── */}
                 {tab === 'diff' && (
                   <div className="forensic-diff-wrap">
-                    {isBinary ? (
-                      <div className="forensic-no-diff">
-                        <div className="forensic-no-diff-icon"><FileText size={32} /></div>
-                        <h3>Binary Forensic Comparison Unavailable</h3>
-                        <p>Text diff is not available for <code>{data.mimeType}</code> files. Use the <strong>Preview</strong> tab.</p>
+                    {extracting && (
+                      <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
+                        ⏳ Extracting text from .docx for comparison...
                       </div>
-                    ) : data.isIdentical ? (
+                    )}
+
+                    {!extracting && !data.isTextComparable && !isDocx && (
+                      <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
+                        📄 Diff not available for {data.mimeType}
+                        <br />Use Preview tab instead.
+                      </div>
+                    )}
+
+                    {!extracting && (data.isTextComparable || isDocx) && data.isIdentical && (
                       <div className="forensic-no-diff forensic-identical">
                         <div className="forensic-no-diff-icon"><CheckCircle2 size={32} /></div>
                         <h3>Files Are Identical</h3>
                         <p>The current file matches the original blockchain-sealed version. No tampering detected.</p>
                       </div>
-                    ) : (
-                      <>
-                        {/* Changes Summary Card */}
-                        {data.changes?.length > 0 && (
-                          <div className="forensic-changes-summary">
-                            <div className="forensic-changes-header">
-                              <AlertTriangle size={15} style={{ color: '#ef4444' }} />
-                              <span>Exact Changes Detected ({data.changes.length})</span>
-                            </div>
-                            <div className="forensic-changes-list">
-                              {data.changes.map((ch, i) => (
-                                <div key={i} className={`forensic-change-item change-${ch.type}`}>
-                                  <div className="forensic-change-meta">
-                                    <span className={`change-type-badge type-${ch.type}`}>{ch.type}</span>
-                                    <span className="change-line-num">Line {ch.line}</span>
-                                  </div>
-                                  {ch.before && (
-                                    <div className="change-line removed-line">
-                                      <span className="diff-glyph">−</span>
-                                      <code>{ch.before}</code>
-                                    </div>
-                                  )}
-                                  {ch.after && (
-                                    <div className="change-line added-line">
-                                      <span className="diff-glyph">+</span>
-                                      <code>{ch.after}</code>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                    )}
 
-                        {/* Side-by-side diff viewer with clear labels */}
+                    {!extracting && (data.isTextComparable || isDocx) && !data.isIdentical && (
+                      <>
                         <ReactDiffViewer
-                          oldValue={data.original || ''}
-                          newValue={data.modified || ''}
+                          oldValue={origText}
+                          newValue={modText}
                           splitView={true}
                           compareMethod={DiffMethod.WORDS}
                           useDarkTheme={true}
-                          styles={diffStyles}
-                          leftTitle={
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <Lock size={13} style={{ color: '#14b8a6' }} />
-                              <span style={{ color: '#14b8a6', fontWeight: 800 }}>ORIGINAL SECURED FILE</span>
-                              <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400 }}>— Blockchain Verified</span>
-                            </span>
-                          }
-                          rightTitle={
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <AlertTriangle size={13} style={{ color: '#ef4444' }} />
-                              <span style={{ color: '#ef4444', fontWeight: 800 }}>TAMPERED FILE</span>
-                              <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400 }}>— Suspicious Copy</span>
-                            </span>
-                          }
-                          hideLineNumbers={false}
+                          leftTitle="🔒 Original (Blockchain Sealed)"
+                          rightTitle="⚠️ Tampered Version"
+                          styles={{
+                            variables: {
+                              dark: {
+                                diffViewerBackground:    '#0d1117',
+                                diffViewerColor:         '#e2e8f0',
+                                addedBackground:         'rgba(20,184,166,0.15)',
+                                addedColor:              '#d1fae5',
+                                removedBackground:       'rgba(239,68,68,0.15)',
+                                removedColor:            '#fecaca',
+                                wordAddedBackground:     'rgba(20,184,166,0.5)',
+                                wordRemovedBackground:   'rgba(239,68,68,0.5)',
+                                addedGutterBackground:   'rgba(20,184,166,0.2)',
+                                removedGutterBackground: 'rgba(239,68,68,0.2)',
+                                gutterBackground:        '#0a0f1a',
+                                gutterColor:             '#475569',
+                              }
+                            },
+                            line:   { fontFamily: 'monospace', fontSize: '12px' },
+                            gutter: { minWidth: '40px' },
+                          }}
                         />
                       </>
                     )}
@@ -443,12 +449,12 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                 {tab === 'preview' && (
                   <div className="forensic-preview-wrap">
                     <TextPreviewPane
-                      content={data.original}
+                      content={origText || data.original}
                       label="ORIGINAL SECURED FILE"
                       side="original"
                     />
                     <TextPreviewPane
-                      content={data.modified}
+                      content={modText || data.modified}
                       label="TAMPERED FILE"
                       side="tampered"
                     />

@@ -94,30 +94,48 @@ export default function Verify({ walletAddress, onNotify }) {
     if (!result?.fileId) return;
     setRestoring(true);
 
+    const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+
     try {
-      // Backend se file fetch karo as binary blob
-      const res = await fetch(
-        `${API}/files/${result.fileId}/download`
-      );
+      // Step 1: Try download
+      const res = await fetch(`${API}/files/${result.fileId}/download`);
 
-      if (!res.ok) throw new Error('Download failed');
+      if (res.ok) {
+        const blob = await res.blob();
+        const url  = window.URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = result.filename || result.fileName || vaultFile?.filename || 'restored_file';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
 
-      // ✅ Binary blob — corruption nahi honar
-      const blob     = await res.blob();
-      const url      = URL.createObjectURL(blob);
-      const a        = document.createElement('a');
-      a.href         = url;
-      // ✅ Original filename sathe download
-      a.download     = result.filename || result.fileName || vaultFile?.filename || 'restored_file';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        // Step 2: Update status to valid
+        await fetch(`${API}/restore/${result.fileId}`, { method: 'POST' });
 
-      if (typeof onNotify === 'function') onNotify('File downloaded to your computer!', 'success');
+        if (typeof onNotify === 'function') onNotify('✅ File restored successfully!', 'success');
+        return;
+      }
+
+      // Step 3: IPFS fallback
+      if (result.ipfsCID) {
+        let cid = result.ipfsCID
+          .replace('https://gateway.pinata.cloud/ipfs/', '')
+          .replace('https://ipfs.io/ipfs/', '')
+          .replace('/ipfs/', '')
+          .replace('ipfs/', '');
+
+        window.open(`https://gateway.pinata.cloud/ipfs/${cid}`, '_blank');
+        if (typeof onNotify === 'function') onNotify('⬇️ Opening original from IPFS...', 'info');
+        return;
+      }
+
+      if (typeof onNotify === 'function') onNotify('Original file not available for restore', 'error');
 
     } catch (err) {
-      if (typeof onNotify === 'function') onNotify('Download failed: ' + err.message, 'error');
+      console.error('Restore error:', err);
+      if (typeof onNotify === 'function') onNotify('❌ Restore failed: ' + err.message, 'error');
     } finally {
       setRestoring(false);
     }

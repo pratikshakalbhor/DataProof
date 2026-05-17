@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,7 +17,6 @@ import (
 
 	"cryptovault/database"
 	"cryptovault/models"
-	"cryptovault/utils"
 )
 
 func GetAllFiles(c *gin.Context) {
@@ -302,8 +303,6 @@ func UpdateTxHash(c *gin.Context) {
 // Trash & Restore Features
 // ─────────────────────────────────────────
 
-
-
 // ── ARCHIVE FILE (Rename of Trash) ───────────────────────────
 func ArchiveFile(c *gin.Context) {
 	fileId := c.Param("id")
@@ -453,52 +452,98 @@ func PublicVerify(c *gin.Context) {
 }
 
 // ── DOWNLOAD ORIGINAL ───────────────────────────
-// Fetches the sealed original from IPFS, decrypts it, and streams to client.
-// Prefixes filename with RESTORED_ when called via /download-original route.
-// No local disk access — works on Render and all ephemeral deployments.
 func DownloadOriginal(c *gin.Context) {
-	fileId := c.Param("id")
+    fileId := c.Param("id")
+    fmt.Printf("[Download] fileId: %s\n", fileId)
 
-	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+    col := database.GetCollection("files")
+    ctx, cancel := context.WithTimeout(
+        context.Background(), 30*time.Second)
+    defer cancel()
 
-	var record models.FileRecord
-	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
-		return
-	}
+    var record models.FileRecord
+    if err := col.FindOne(ctx,
+        bson.M{"fileId": fileId}).Decode(&record); err != nil {
+        c.JSON(http.StatusNotFound,
+            gin.H{"error": "File not found", "fileId": fileId})
+        return
+    }
 
-	mimeType := record.MimeType
-	if mimeType == "" {
-		mimeType = getMimeType(record.Filename)
-	}
+    filename := record.Filename
+    if filename == "" {
+        filename = fileId + ".bin"
+    }
+    ext := filepath.Ext(filename)
 
-	dlName := record.Filename
-	if strings.HasSuffix(c.FullPath(), "/download-original") {
-		dlName = "RESTORED_" + record.Filename
-	}
+    // ✅ Search multiple paths
+    paths := []string{
+        record.BackupPath,
+        record.VaultPath,
+        filepath.Join("backup", fileId+ext),
+        filepath.Join("backup", fileId+"_original"+ext),
+        filepath.Join("uploads", fileId+"_"+filename),
+        filepath.Join("uploads", fileId+ext),
+    }
 
-	// ── Primary: Fetch from IPFS and stream decrypted bytes ──
-	if record.IpfsCID != "" {
-		originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
-		if err == nil {
-			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, dlName))
-			c.Header("Content-Type", mimeType)
-			c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-			c.Data(http.StatusOK, mimeType, originalBytes)
-			return
+    for _, p := range paths {
+        if p == "" {
+            continue
+        }
+        fmt.Printf("[Download] checking: %s\n", p)
+        if _, err := os.Stat(p); err == nil {
+            fmt.Printf("[Download] ✅ found: %s\n", p)
+            c.Header("Content-Disposition",
+                fmt.Sprintf(`attachment; filename="%s"`, filename))
+            c.Header("Content-Type", "application/octet-stream")
+            c.Header("Access-Control-Allow-Origin", "*")
+            c.File(p)
+            return
+        }
+    }
+
+    // ✅ IPFS fallback
+    if record.IpfsCID != "" {
+        cid := strings.TrimSpace(record.IpfsCID)
+        cid = strings.TrimPrefix(cid,
+            "https://gateway.pinata.cloud/ipfs/")
+        cid = strings.TrimPrefix(cid, "https://ipfs.io/ipfs/")
+        cid = strings.TrimPrefix(cid, "/ipfs/")
+        cid = strings.TrimPrefix(cid, "ipfs/")
+
+        ipfsURL := "https://gateway.pinata.cloud/ipfs/" + cid
+        fmt.Printf("[Download] IPFS: %s\n", ipfsURL)
+
+        client := &http.Client{Timeout: 60 * time.Second}
+        resp, err := client.Get(ipfsURL)
+        if err == nil && resp.StatusCode == 200 {
+            defer resp.Body.Close()
+            c.Header("Content-Disposition",
+                fmt.Sprintf(`attachment; filename="%s"`, filename))
+            c.Header("Content-Type", "application/octet-stream")
+            c.Header("Access-Control-Allow-Origin", "*")
+            io.Copy(c.Writer, resp.Body)
+            return
+        }
+    }
+
+    fmt.Printf("[Download] ❌ not found: %s\n", fileId)
+    c.JSON(http.StatusNotFound, gin.H{
+        "error":  "File not available",
+        "fileId": fileId,
+        "paths":  paths,
+    })
+}
+
+func sanitizeFilename(name string) string {
+	name = strings.ReplaceAll(name, " ", "_")
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			b.WriteRune(r)
 		}
-		log.Printf("⚠️  IPFS fetch failed for CID %s: %v — trying URL redirect", record.IpfsCID, err)
 	}
-
-	// ── Fallback: Redirect to raw IPFS URL (encrypted) ──
-	if record.EncryptedURL != "" {
-		c.Redirect(http.StatusTemporaryRedirect, record.EncryptedURL)
-		return
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{"error": "Original file not available — no IPFS CID or URL stored"})
+	return b.String()
 }
 
 // ✅ MIME type helper function
@@ -528,4 +573,15 @@ func getMimeType(filename string) string {
 	}
 }
 
-
+// ✅ Trash Aliases for Compatibility
+func GetTrashFiles(c *gin.Context) {
+	GetArchivedFiles(c)
+}
+
+func RestoreFromTrash(c *gin.Context) {
+	RestoreFromArchive(c)
+}
+
+func TrashFile(c *gin.Context) {
+	ArchiveFile(c)
+}

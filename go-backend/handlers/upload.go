@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,19 +21,6 @@ import (
 )
 
 // UploadFile — POST /api/upload
-//
-// Architecture (IPFS-first, no local filesystem dependency):
-//
-//  1. Receive multipart file + wallet + signature
-//  2. SHA-256 hash of raw bytes → duplicate check
-//  3. Signature verification (optional but recommended)
-//  4. AES-GCM encrypt bytes
-//  5. Upload encrypted bytes → Pinata/IPFS → get CID
-//  6. Save record in MongoDB (CID + hash + txHash + wallet)
-//  7. Return fileId, CID, ipfsURL to frontend
-//
-// Local vault/ and backup/ folders are NOT used.
-// Render (and any ephemeral backend) works correctly with this flow.
 func UploadFile(c *gin.Context) {
 	// ── 1. Receive file ─────────────────────────────────────────────────────
 	file, header, err := c.Request.FormFile("file")
@@ -138,7 +126,7 @@ func UploadFile(c *gin.Context) {
 	}
 	log.Printf("📦 IPFS Upload SUCCESS — CID: %s | URL: %s", ipfsCID, ipfsURL)
 
-	// Allow frontend override URL (Cloudinary, etc.) — kept for backward compat
+	// Allow frontend override URL
 	if frontendURL := c.PostForm("encryptedUrl"); frontendURL != "" {
 		ipfsURL = frontendURL
 	} else if cloudURL := c.PostForm("cloudinaryUrl"); cloudURL != "" {
@@ -164,24 +152,44 @@ func UploadFile(c *gin.Context) {
 		}
 	}
 
+	// Create backup/ and vault/ folders if not exist
+	os.MkdirAll("backup", 0755)
+	os.MkdirAll("vault", 0755)
+
 	// ── 8. Version update or new record ──────────────────────────────────────
 	if parentFileId != "" {
 		// ── VERSION UPDATE PATH ────────────────────────────────────────────
 		var parent models.FileRecord
 		if err := collection.FindOne(ctx, bson.M{"fileId": parentFileId}).Decode(&parent); err == nil {
 			newVersion := parent.Version + 1
+			ext := filepath.Ext(header.Filename)
+			backupPath := filepath.Join("backup", parentFileId+ext)
+			os.WriteFile(backupPath, fileBytes, 0644)
+
+			var extractedText string
+			if strings.ToLower(ext) == ".docx" {
+				text, err := extractDocxText(backupPath)
+				if err == nil {
+					extractedText = text
+					txtPath := filepath.Join("backup", parentFileId+"_text.txt")
+					os.WriteFile(txtPath, []byte(text), 0644)
+				}
+			}
+
 			_, _ = collection.UpdateOne(ctx,
 				bson.M{"fileId": parentFileId},
 				bson.M{
 					"$set": bson.M{
-						"originalHash": fileHash,
-						"ipfsCID":      ipfsCID,
-						"encryptedUrl": ipfsURL,
-						"txHash":       txHash,
-						"fileSize":     header.Size,
-						"mimeType":     header.Header.Get("Content-Type"),
-						"version":      newVersion,
-						"uploadedAt":   time.Now(),
+						"originalHash":  fileHash,
+						"ipfsCID":       ipfsCID,
+						"encryptedUrl":  ipfsURL,
+						"txHash":        txHash,
+						"fileSize":      header.Size,
+						"mimeType":      header.Header.Get("Content-Type"),
+						"version":       newVersion,
+						"uploadedAt":    time.Now(),
+						"backupPath":    backupPath,
+						"extractedText": extractedText,
 					},
 					"$push": bson.M{
 						"versions": models.VersionRecord{
@@ -209,12 +217,26 @@ func UploadFile(c *gin.Context) {
 			txHash = clientTxHash
 		}
 
-		// Build MongoDB record — NO backupPath / vaultPath (IPFS is the source)
+		ext := filepath.Ext(header.Filename)
+		backupPath := filepath.Join("backup", fileID+ext)
+		os.WriteFile(backupPath, fileBytes, 0644)
+
+		var extractedText string
+		if strings.ToLower(ext) == ".docx" {
+			text, err := extractDocxText(backupPath)
+			if err == nil {
+				extractedText = text
+				txtPath := filepath.Join("backup", fileID+"_text.txt")
+				os.WriteFile(txtPath, []byte(text), 0644)
+			}
+		}
+
+		// Build MongoDB record
 		record := models.FileRecord{
 			FileID:        fileID,
 			PublicID:      publicID,
 			Filename:      header.Filename,
-			FileExtension: filepath.Ext(header.Filename),
+			FileExtension: ext,
 			OriginalHash:  fileHash,
 			EncryptedURL:  ipfsURL,
 			IpfsCID:       ipfsCID,
@@ -223,13 +245,13 @@ func UploadFile(c *gin.Context) {
 			WalletAddress: wallet,
 			TxHash:        txHash,
 			Status:        "valid",
-			// BackupPath and VaultPath intentionally left empty —
-			// IPFS/Pinata is the authoritative permanent storage.
-			BackupPath: "",
-			VaultPath:  "",
-			ExpiryDate: expiryDate,
-			UploadedAt: time.Now(),
-			Version:    1,
+			BackupPath:    backupPath,
+			VaultPath:     "",
+			ExtractedText: extractedText,
+			TamperedText:  "",
+			ExpiryDate:    expiryDate,
+			UploadedAt:    time.Now(),
+			Version:       1,
 		}
 
 		log.Printf("💾 Saving record — fileId: %s | hash: %s | CID: %s", record.FileID, record.OriginalHash, record.IpfsCID)
