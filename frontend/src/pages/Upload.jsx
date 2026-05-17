@@ -94,20 +94,27 @@ export default function Upload({ walletAddress, onNavigate }) {
 
       // Step 4 — MetaMask popup (always for new files)
       step(3); await delay(200);
-      console.log('🦊 Triggering MetaMask for new file hash:', fileHash?.slice(0, 16) + '...');
+      console.log('🦊 Triggering MetaMask for new file:', filename, '| hash:', fileHash?.slice(0, 16) + '...');
 
       let txHash     = 'pending';
       let blockNumber = 0;
 
       try {
-        const bcResult = await sealFileOnBlockchain({ fileHash });
+        const bcResult = await sealFileOnBlockchain({
+          fileId,
+          filename,
+          fileHash,
+          ipfsCID:       uploadData.ipfsCID || '',
+          encryptedHash: uploadData.encryptedHash || '',
+          mongoDbRef:    fileId,
+          cloudinaryUrl: uploadData.cloudinaryUrl || '',
+          fileSize:      fileSize || file.size || 0,
+        });
         txHash      = bcResult.txHash;
         blockNumber = bcResult.blockNumber;
         console.log('✅ Blockchain confirmed! TX:', txHash);
       } catch (bcErr) {
         console.warn('⚠️ Blockchain seal failed:', bcErr.message);
-        // User rejected or network error — file still saved, blockchain is optional
-        // But we show a clear warning in the result
         if (bcErr.message?.includes('user rejected') || bcErr.code === 4001) {
           setError('MetaMask transaction was rejected. File saved to vault but NOT sealed on blockchain.');
         }

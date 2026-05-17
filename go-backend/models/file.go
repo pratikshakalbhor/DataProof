@@ -24,10 +24,11 @@ type FileRecord struct {
 	Visibility    string     `json:"visibility"    bson:"visibility"`
 	SharedWith    []string   `json:"sharedWith"    bson:"sharedWith"`
 	ExpiryDate    *time.Time `json:"expiryDate"    bson:"expiryDate"`
-	Version       int        `json:"version"       bson:"version"`
-	UploadedAt    time.Time  `json:"uploadedAt"    bson:"uploadedAt"`
-	VerifiedAt    *time.Time `json:"verifiedAt"    bson:"verifiedAt"`
-	UpdatedAt     *time.Time `json:"updatedAt"     bson:"updatedAt"`
+	Version       int             `json:"version"       bson:"version"`
+	UploadedAt    time.Time       `json:"uploadedAt"    bson:"uploadedAt"`
+	VerifiedAt    *time.Time      `json:"verifiedAt"    bson:"verifiedAt"`
+	UpdatedAt     *time.Time      `json:"updatedAt"     bson:"updatedAt"`
+	Versions      []VersionRecord `json:"versions"      bson:"versions"`
 }
 
 type AuditLog struct {

@@ -7,7 +7,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,30 +19,44 @@ import (
 	"cryptovault/utils"
 )
 
+// UploadFile — POST /api/upload
+//
+// Architecture (IPFS-first, no local filesystem dependency):
+//
+//  1. Receive multipart file + wallet + signature
+//  2. SHA-256 hash of raw bytes → duplicate check
+//  3. Signature verification (optional but recommended)
+//  4. AES-GCM encrypt bytes
+//  5. Upload encrypted bytes → Pinata/IPFS → get CID
+//  6. Save record in MongoDB (CID + hash + txHash + wallet)
+//  7. Return fileId, CID, ipfsURL to frontend
+//
+// Local vault/ and backup/ folders are NOT used.
+// Render (and any ephemeral backend) works correctly with this flow.
 func UploadFile(c *gin.Context) {
+	// ── 1. Receive file ─────────────────────────────────────────────────────
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File not found"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File not found in request"})
 		return
 	}
 	defer file.Close()
 
 	wallet := strings.ToLower(c.PostForm("wallet"))
-	signature := c.PostForm("signature")
-	message := c.PostForm("message")
-	clientFileHash := c.PostForm("fileHash")
-
 	if wallet == "" {
 		wallet = strings.ToLower(c.Request.FormValue("walletAddress"))
 	}
-	parentFileId := c.PostForm("parentFileId")
-
 	if wallet == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Wallet address required"})
 		return
 	}
 
-	// Read file bytes for hashing
+	signature := c.PostForm("signature")
+	message := c.PostForm("message")
+	clientFileHash := c.PostForm("fileHash")
+	parentFileId := c.PostForm("parentFileId")
+
+	// ── 2. Hash raw bytes ────────────────────────────────────────────────────
 	fileBytes, err := io.ReadAll(file)
 	if err != nil {
 		log.Printf("❌ Failed to read uploaded file: %v", err)
@@ -51,13 +64,12 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// Hash (stored WITHOUT 0x prefix for consistency)
+	// Hash stored WITHOUT 0x prefix for consistency
 	fileHash := strings.ToLower(utils.GenerateSHA256FromBytes(fileBytes))
 
-	// If client provided a hash, we can verify it matches our calculation
 	if clientFileHash != "" && !strings.EqualFold(strings.TrimPrefix(clientFileHash, "0x"), fileHash) {
 		log.Printf("❌ Hash mismatch: Client(%s) != Server(%s)", clientFileHash, fileHash)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File integrity check failed (hash mismatch)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File integrity check failed — hash mismatch"})
 		return
 	}
 
@@ -65,13 +77,13 @@ func UploadFile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// 🛡️ DUPLICATE PREVENTION (Early Check) — check both with and without 0x prefix
+	// ── 3. Duplicate prevention ───────────────────────────────────────────────
 	var existing models.FileRecord
 	if err := collection.FindOne(ctx, bson.M{"$or": []bson.M{
 		{"originalHash": fileHash},
 		{"originalHash": "0x" + fileHash},
 	}}).Decode(&existing); err == nil {
-		log.Printf("⚠️ File already in DB: %s", existing.FileID)
+		log.Printf("⚠️  Duplicate file detected in DB: %s", existing.FileID)
 		c.JSON(http.StatusOK, gin.H{
 			"success":  true,
 			"fileId":   existing.FileID,
@@ -80,74 +92,67 @@ func UploadFile(c *gin.Context) {
 			"filename": existing.Filename,
 			"txHash":   existing.TxHash,
 			"ipfsCID":  existing.IpfsCID,
+			"ipfsURL":  existing.EncryptedURL,
 			"message":  "File already registered",
 			"existing": true,
 		})
 		return
 	}
 
-	// 🛡️ SIGNATURE VERIFICATION
+	// ── 4. Signature verification ─────────────────────────────────────────────
 	if signature != "" {
 		if message == "" {
-			// Fallback if message not provided, but we should encourage message
 			message = fmt.Sprintf("Verify file ownership: %s", clientFileHash)
 		}
-
 		recoveredAddr, err := utils.RecoverSigner(message, signature)
 		if err != nil {
 			log.Printf("❌ Signature recovery failed: %v", err)
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Invalid digital signature",
-			})
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid digital signature"})
 			return
 		}
-
 		if !strings.EqualFold(recoveredAddr, wallet) {
 			log.Printf("❌ Signer mismatch: %s != %s", recoveredAddr, wallet)
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Invalid digital signature",
-			})
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Wallet signature mismatch"})
 			return
 		}
-		log.Printf("✅ Digital Signature Verified for: %s", recoveredAddr)
+		log.Printf("✅ Digital signature verified for: %s", recoveredAddr)
 	}
 
-	// Encrypt
+	// ── 5. AES-GCM encryption ─────────────────────────────────────────────────
 	encryptedBytes, err := utils.EncryptAES(fileBytes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Encryption failed"})
+		log.Printf("❌ Encryption failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "File encryption failed"})
 		return
 	}
 
-	// Upload to IPFS
+	// ── 6. Upload to Pinata/IPFS (PRIMARY storage) ────────────────────────────
 	ipfsURL, ipfsCID, err := utils.UploadToPinata(encryptedBytes, header.Filename)
 	if err != nil {
-		log.Printf("⚠️ Pinata upload failed: %v — using fallback", err)
-		ipfsURL = ""
-		ipfsCID = ""
+		log.Printf("❌ Pinata upload FAILED: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":  "IPFS upload failed — file cannot be stored permanently",
+			"detail": err.Error(),
+		})
+		return
 	}
-	log.Printf("📦 IPFS Upload — URL: %s | CID: %s", ipfsURL, ipfsCID)
+	log.Printf("📦 IPFS Upload SUCCESS — CID: %s | URL: %s", ipfsCID, ipfsURL)
 
-	// Accept optional override from frontend (Cloudinary or other storage)
-	if frontendUrl := c.PostForm("encryptedUrl"); frontendUrl != "" {
-		ipfsURL = frontendUrl
-	} else if cloudUrl := c.PostForm("cloudinaryUrl"); cloudUrl != "" {
-		ipfsURL = cloudUrl
+	// Allow frontend override URL (Cloudinary, etc.) — kept for backward compat
+	if frontendURL := c.PostForm("encryptedUrl"); frontendURL != "" {
+		ipfsURL = frontendURL
+	} else if cloudURL := c.PostForm("cloudinaryUrl"); cloudURL != "" {
+		ipfsURL = cloudURL
 	}
 
-	// Real blockchain TX will be stored after frontend confirmation
-	txHash := ""
-
+	// ── 7. Parse optional metadata ───────────────────────────────────────────
 	fileID := fmt.Sprintf("FILE-%d", time.Now().Unix())
 	publicID := randomString(10)
+	txHash := ""
 
-	// Expiry — try multiple formats (ISO 8601 from frontend, or date-only)
 	expiryStr := c.PostForm("expiryDate")
 	var expiryDate *time.Time
 	if expiryStr != "" {
-		// Try ISO 8601 first (from frontend datetime-local: "2026-05-10T10:30:00.000Z")
 		if t, e := time.Parse(time.RFC3339, expiryStr); e == nil {
 			expiryDate = &t
 		} else if t, e := time.Parse("2006-01-02T15:04:05", expiryStr); e == nil {
@@ -155,25 +160,23 @@ func UploadFile(c *gin.Context) {
 		} else if t, e := time.Parse("2006-01-02", expiryStr); e == nil {
 			expiryDate = &t
 		} else {
-			log.Printf("⚠️ Could not parse expiry date: %s", expiryStr)
+			log.Printf("⚠️  Could not parse expiry date: %s", expiryStr)
 		}
 	}
 
-	// VERSION LOGIC FIX
+	// ── 8. Version update or new record ──────────────────────────────────────
 	if parentFileId != "" {
-		var existing models.FileRecord
-		err := collection.FindOne(ctx, bson.M{"fileId": parentFileId}).Decode(&existing)
-
-		if err == nil {
-			newVersion := existing.Version + 1
-
+		// ── VERSION UPDATE PATH ────────────────────────────────────────────
+		var parent models.FileRecord
+		if err := collection.FindOne(ctx, bson.M{"fileId": parentFileId}).Decode(&parent); err == nil {
+			newVersion := parent.Version + 1
 			_, _ = collection.UpdateOne(ctx,
 				bson.M{"fileId": parentFileId},
 				bson.M{
 					"$set": bson.M{
 						"originalHash": fileHash,
 						"ipfsCID":      ipfsCID,
-						"encryptedURL": ipfsURL,
+						"encryptedUrl": ipfsURL,
 						"txHash":       txHash,
 						"fileSize":     header.Size,
 						"mimeType":     header.Header.Get("Content-Type"),
@@ -188,65 +191,25 @@ func UploadFile(c *gin.Context) {
 							Timestamp: time.Now(),
 						},
 					},
-				})
-
+				},
+			)
 			fileID = parentFileId
-			publicID = existing.PublicID
+			publicID = parent.PublicID
+			log.Printf("✅ Version %d saved for fileId=%s | CID=%s", newVersion, fileID, ipfsCID)
 		}
 	} else {
-
-		// 🛡️ TX HASH VALIDATION (Requirement #4)
-		// Try to get txHash from frontend first, else use mock
+		// ── NEW FILE PATH ──────────────────────────────────────────────────
 		clientTxHash := c.PostForm("txHash")
 		if clientTxHash != "" {
 			if !strings.HasPrefix(clientTxHash, "0x") || len(clientTxHash) != 66 {
-				log.Printf("❌ Invalid txHash provided: %s", clientTxHash)
+				log.Printf("❌ Invalid txHash: %s", clientTxHash)
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid transaction hash format"})
 				return
 			}
 			txHash = clientTxHash
 		}
 
-		// ── SAVE FILES TO DISK (backup + vault) ──
-		// Resolve absolute base directory so paths are always correct regardless
-		// of which directory the binary is launched from.
-		workDir, wdErr := filepath.Abs(".")
-		if wdErr != nil {
-			workDir = "."
-		}
-
-		cleanFilename := strings.ReplaceAll(header.Filename, " ", "_")
-		safeFileName := fileID + "_" + cleanFilename
-
-		// 1. Backup dir — immutable original reference
-		absBackupDir := filepath.Join(workDir, "backup")
-		if err := os.MkdirAll(absBackupDir, 0755); err != nil {
-			log.Printf("⚠️ Could not create backup dir: %v", err)
-		}
-		absBackupPath := filepath.Join(absBackupDir, safeFileName)
-
-		if err := os.WriteFile(absBackupPath, fileBytes, 0644); err != nil {
-			log.Printf("⚠️ Backup save failed: %v", err)
-			absBackupPath = "" // mark as missing so forensic endpoint knows
-		} else {
-			log.Printf("📥 Backup saved → %s", absBackupPath)
-		}
-
-		// 2. Vault dir — working/tamperable copy
-		absVaultDir := filepath.Join(workDir, "vault")
-		if err := os.MkdirAll(absVaultDir, 0755); err != nil {
-			log.Printf("⚠️ Could not create vault dir: %v", err)
-		}
-		absVaultPath := filepath.Join(absVaultDir, safeFileName)
-
-		if err := os.WriteFile(absVaultPath, fileBytes, 0644); err != nil {
-			log.Printf("⚠️ Vault save failed: %v", err)
-			absVaultPath = ""
-		} else {
-			log.Printf("📦 Vault copy saved → %s", absVaultPath)
-		}
-
-		// New file
+		// Build MongoDB record — NO backupPath / vaultPath (IPFS is the source)
 		record := models.FileRecord{
 			FileID:        fileID,
 			PublicID:      publicID,
@@ -260,33 +223,32 @@ func UploadFile(c *gin.Context) {
 			WalletAddress: wallet,
 			TxHash:        txHash,
 			Status:        "valid",
-			BackupPath:    absBackupPath,
-			VaultPath:     absVaultPath,
-			ExpiryDate:    expiryDate,
-			UploadedAt:    time.Now(),
-			Version:       1,
+			// BackupPath and VaultPath intentionally left empty —
+			// IPFS/Pinata is the authoritative permanent storage.
+			BackupPath: "",
+			VaultPath:  "",
+			ExpiryDate: expiryDate,
+			UploadedAt: time.Now(),
+			Version:    1,
 		}
-		log.Printf("💾 Saving record — fileId: %s | hash: %s | ipfs: %s | url: %s",
-			record.FileID, record.OriginalHash, record.IpfsCID, record.EncryptedURL)
+
+		log.Printf("💾 Saving record — fileId: %s | hash: %s | CID: %s", record.FileID, record.OriginalHash, record.IpfsCID)
 
 		result, err := collection.InsertOne(ctx, record)
 		if err != nil {
 			log.Printf("❌ MongoDB INSERT ERROR: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Database save failed: " + err.Error(),
-			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database save failed: " + err.Error()})
 			return
 		}
-		log.Printf("✅ MongoDB INSERT SUCCESS: fileId=%s, id=%v", record.FileID, result.InsertedID)
+		log.Printf("✅ MongoDB INSERT SUCCESS: fileId=%s, _id=%v", record.FileID, result.InsertedID)
 	}
 
-	// Notification
+	// ── 9. Notifications & audit ─────────────────────────────────────────────
 	NotifyUpload(wallet, header.Filename, fileID)
+	LogAudit(wallet, fileID, header.Filename, "FILE_UPLOADED", txHash, 0,
+		"File encrypted and stored on IPFS (CID: "+ipfsCID+")")
 
-	// Log Audit
-	LogAudit(wallet, fileID, header.Filename, "FILE_UPLOADED", txHash, 0, "Initial registration and encryption on blockchain")
-
-	//  FINAL RESPONSE
+	// ── 10. Response ─────────────────────────────────────────────────────────
 	c.JSON(http.StatusCreated, gin.H{
 		"success":      true,
 		"fileId":       fileID,
@@ -298,7 +260,7 @@ func UploadFile(c *gin.Context) {
 		"encryptedUrl": ipfsURL, // alias for frontend compatibility
 		"fileSize":     header.Size,
 		"txHash":       txHash,
-		"message":      "File uploaded! Seal on blockchain.",
+		"message":      "File uploaded to IPFS and registered. Seal on blockchain.",
 	})
 }
 

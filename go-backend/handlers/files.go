@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 	"cryptovault/database"
 	"cryptovault/models"
+	"cryptovault/utils"
 )
 
 func GetAllFiles(c *gin.Context) {
@@ -154,8 +154,8 @@ func GetFileVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":  true,
 		"fileId":   fileID,
-		// "versions": record.Versions,
-		// "total":    len(record.Versions),
+		"versions": record.Versions,
+		"total":    len(record.Versions),
 	})
 }
 
@@ -453,55 +453,52 @@ func PublicVerify(c *gin.Context) {
 }
 
 // ── DOWNLOAD ORIGINAL ───────────────────────────
+// Fetches the sealed original from IPFS, decrypts it, and streams to client.
+// Prefixes filename with RESTORED_ when called via /download-original route.
+// No local disk access — works on Render and all ephemeral deployments.
 func DownloadOriginal(c *gin.Context) {
-    fileId := c.Param("id")
+	fileId := c.Param("id")
 
-    col := database.GetCollection("files")
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
+	col := database.GetCollection("files")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-    var record models.FileRecord
-    if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
-        c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
-        return
-    }
+	var record models.FileRecord
+	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
 
-    // ── Option 1: Local backup ──
-    backupPath := record.BackupPath
-    if backupPath == "" { backupPath = record.VaultPath }
+	mimeType := record.MimeType
+	if mimeType == "" {
+		mimeType = getMimeType(record.Filename)
+	}
 
-    if backupPath != "" {
-        if _, err := os.Stat(backupPath); err == nil {
-            // ✅ Force download — user browser madhe download hoil
-            mimeType := record.MimeType
-            if mimeType == "" {
-                mimeType = "application/octet-stream"
-            }
-            c.Header("Content-Disposition",
-                fmt.Sprintf(`attachment; filename="%s"`, record.Filename))
-            c.Header("Content-Type", mimeType)
-            c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-            c.File(backupPath)
-            return
-        }
-    }
+	dlName := record.Filename
+	if strings.HasSuffix(c.FullPath(), "/download-original") {
+		dlName = "RESTORED_" + record.Filename
+	}
 
-    // ── Option 2: IPFS redirect ──
-    if record.IpfsCID != "" {
-        ipfsUrl := "https://gateway.pinata.cloud/ipfs/" + record.IpfsCID
-        c.Redirect(http.StatusTemporaryRedirect, ipfsUrl)
-        return
-    }
+	// ── Primary: Fetch from IPFS and stream decrypted bytes ──
+	if record.IpfsCID != "" {
+		originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
+		if err == nil {
+			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, dlName))
+			c.Header("Content-Type", mimeType)
+			c.Header("Access-Control-Expose-Headers", "Content-Disposition")
+			c.Data(http.StatusOK, mimeType, originalBytes)
+			return
+		}
+		log.Printf("⚠️  IPFS fetch failed for CID %s: %v — trying URL redirect", record.IpfsCID, err)
+	}
 
-    // ── Option 3: Cloud URL ──
-    if record.EncryptedURL != "" {
-        c.Redirect(http.StatusTemporaryRedirect, record.EncryptedURL)
-        return
-    }
+	// ── Fallback: Redirect to raw IPFS URL (encrypted) ──
+	if record.EncryptedURL != "" {
+		c.Redirect(http.StatusTemporaryRedirect, record.EncryptedURL)
+		return
+	}
 
-    c.JSON(http.StatusNotFound, gin.H{
-        "error": "Original file not available for download",
-    })
+	c.JSON(http.StatusNotFound, gin.H{"error": "Original file not available — no IPFS CID or URL stored"})
 }
 
 // ✅ MIME type helper function

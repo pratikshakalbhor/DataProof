@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -140,10 +139,18 @@ func VerifyFile(c *gin.Context) {
 		}
 	}
 
-	// ── 5. Diff Detection (text files) ──
+	// ── 5. Diff Detection (text files) — fetch original from IPFS ──
 	var diffResult gin.H
-	if status == "TAMPERED" {
-		diffResult = generateDiff(record.BackupPath, file, header.Filename)
+	if status == "TAMPERED" && record.IpfsCID != "" {
+		originalBytes, ipfsErr := utils.FetchFromIPFS(record.IpfsCID)
+		if ipfsErr == nil {
+			diffResult = generateDiffFromBytes(originalBytes, file, header.Filename)
+		} else {
+			diffResult = gin.H{
+				"available": false,
+				"message":   "Original not accessible from IPFS: " + ipfsErr.Error(),
+			}
+		}
 	}
 
 	// ── 6. MongoDB update + Tamper log ──
@@ -205,7 +212,6 @@ func VerifyFile(c *gin.Context) {
 		"walletAddress": record.WalletAddress,
 		"uploadedAt":    record.UploadedAt,
 		"restoreUrl":    record.EncryptedURL,
-		"backupPath":    record.BackupPath,
 		"ipfsCID":       record.IpfsCID,
 	}
 
@@ -219,8 +225,10 @@ func VerifyFile(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// ── Diff Generator ──────────────────────────────
-func generateDiff(backupPath string, currentFile io.ReadSeeker, filename string) gin.H {
+// ── Diff Generator (IPFS-based) ──────────────────────────────
+// generateDiffFromBytes compares originalBytes (fetched from IPFS) with the
+// current uploaded file byte-for-byte at the line level.
+func generateDiffFromBytes(originalBytes []byte, currentFile io.ReadSeeker, filename string) gin.H {
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	// Supported text types
@@ -241,24 +249,7 @@ func generateDiff(backupPath string, currentFile io.ReadSeeker, filename string)
 		}
 	}
 
-	// Read original backup
-	if backupPath == "" {
-		return gin.H{
-			"available": false,
-			"message":   "Original backup not found — enable backup during upload",
-		}
-	}
-
-	origFile, err := os.Open(backupPath)
-	if err != nil {
-		return gin.H{
-			"available": false,
-			"message":   "Backup file not accessible: " + err.Error(),
-		}
-	}
-	defer origFile.Close()
-
-	origLines := readLines(origFile)
+	origLines := strings.Split(string(originalBytes), "\n")
 	currentLines := readLines(currentFile)
 
 	// Line-by-line diff
@@ -354,12 +345,15 @@ func readLines(r io.Reader) []string {
 	return lines
 }
 
-// ── Restore File (Forensic Recovery) ─────────────────────────────
+// ── Restore File (Forensic Recovery via IPFS) ────────────────────────────
+// RestoreFile fetches the original encrypted file from IPFS using the stored
+// CID, decrypts it, and streams the original bytes to the client.
+// No local disk access is required — works on Render and any ephemeral host.
 func RestoreFile(c *gin.Context) {
 	fileId := c.Param("id")
 
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -376,65 +370,38 @@ func RestoreFile(c *gin.Context) {
 
 	now := time.Now()
 
-	// ── Option 1: Local backup folder ──
-	if record.BackupPath != "" {
-		if _, err := os.Stat(record.BackupPath); err == nil {
-			col.UpdateOne(ctx,
-				bson.M{"fileId": fileId},
-				bson.M{"$set": bson.M{"status": "valid", "updatedAt": now}},
-			)
-			NotifyRestored(record.WalletAddress, record.Filename, fileId)
-			LogAudit(wallet, fileId, record.Filename, "FILE_RESTORED", record.TxHash, record.BlockNumber, "Forensic restoration from local vault")
-			
-			// Detect MIME type
-			mimeType := record.MimeType
-			if mimeType == "" {
-				mimeType = "application/octet-stream"
-				if strings.HasSuffix(strings.ToLower(record.Filename), ".docx") {
-					mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-				}
-			}
-
-			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, record.Filename))
-			c.Header("Content-Type", mimeType)
-			c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-			c.File(record.BackupPath)
-			return
-		}
-	}
-
-	// ── Option 2: IPFS/Pinata ──
+	// ── Primary: IPFS/Pinata (permanent, production-ready) ──
 	if record.IpfsCID != "" {
-		ipfsURL := "https://gateway.pinata.cloud/ipfs/" + record.IpfsCID
-		resp, err := http.Get(ipfsURL)
-		if err == nil && resp.StatusCode == 200 {
-			defer resp.Body.Close()
-
-			col.UpdateOne(ctx,
-				bson.M{"fileId": fileId},
-				bson.M{"$set": bson.M{"status": "valid", "updatedAt": now}},
-			)
-			NotifyRestored(record.WalletAddress, record.Filename, fileId)
-
-			// Detect MIME
-			mimeType := record.MimeType
-			if mimeType == "" {
-				mimeType = "application/octet-stream"
-				if strings.HasSuffix(strings.ToLower(record.Filename), ".docx") {
-					mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-				}
-			}
-
-			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, record.Filename))
-			c.Header("Content-Type", mimeType)
-			c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-			
-			io.Copy(c.Writer, resp.Body)
+		originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"success": false,
+				"message": "Failed to fetch original from IPFS: " + err.Error(),
+			})
 			return
 		}
+
+		// Update DB status
+		col.UpdateOne(ctx,
+			bson.M{"fileId": fileId},
+			bson.M{"$set": bson.M{"status": "valid", "updatedAt": now}},
+		)
+		NotifyRestored(record.WalletAddress, record.Filename, fileId)
+		LogAudit(wallet, fileId, record.Filename, "FILE_RESTORED", record.TxHash, record.BlockNumber, "Forensic restoration from IPFS (CID: "+record.IpfsCID+")")
+
+		mimeType := record.MimeType
+		if mimeType == "" {
+			mimeType = getMimeType(record.Filename)
+		}
+
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="RESTORED_%s"`, record.Filename))
+		c.Header("Content-Type", mimeType)
+		c.Header("Access-Control-Expose-Headers", "Content-Disposition")
+		c.Data(http.StatusOK, mimeType, originalBytes)
+		return
 	}
 
-	// ── Option 3: Cloud URL (Cloudinary) ──
+	// ── Fallback: Direct IPFS URL redirect (if CID missing but URL stored) ──
 	if record.EncryptedURL != "" {
 		col.UpdateOne(ctx,
 			bson.M{"fileId": fileId},
@@ -443,7 +410,7 @@ func RestoreFile(c *gin.Context) {
 		NotifyRestored(record.WalletAddress, record.Filename, fileId)
 		c.JSON(http.StatusOK, gin.H{
 			"success":    true,
-			"message":    "Redirect to cloud backup",
+			"message":    "Redirect to IPFS backup",
 			"restoreUrl": record.EncryptedURL,
 			"filename":   record.Filename,
 		})
@@ -452,8 +419,8 @@ func RestoreFile(c *gin.Context) {
 
 	c.JSON(http.StatusNotFound, gin.H{
 		"success": false,
-		"message": "No backup available. Enable backup during upload.",
-		"hint":    "Upload again to create backup copy",
+		"message": "No IPFS backup found. This file may have been uploaded before IPFS storage was enabled.",
+		"hint":    "Re-upload the file to store it permanently on IPFS.",
 	})
 }
 

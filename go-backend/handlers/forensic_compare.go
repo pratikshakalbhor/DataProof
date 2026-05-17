@@ -229,95 +229,37 @@ func ForensicCompare(c *gin.Context) {
 	fmt.Printf("[FORENSIC] ✅ MongoDB record found: %s | backupPath=%s | vaultPath=%s\n",
 		record.Filename, record.BackupPath, record.VaultPath)
 
-	// 2. Resolve actual file paths
-	originalPath := findFile(record.BackupPath, fileId, record.Filename, "backup")
-	tamperedPath := findFile(record.VaultPath, fileId, record.Filename, "vault")
-
-	fmt.Printf("[FORENSIC] Original resolved path: %q\n", originalPath)
-	fmt.Printf("[FORENSIC] Tampered resolved path: %q\n", tamperedPath)
-
-	if originalPath == "" {
-		fmt.Printf("[FORENSIC] ⚠️ Original local backup missing. Attempting IPFS recovery for CID: %s\n", record.IpfsCID)
-		
-		if record.IpfsCID != "" {
-			// Try to recover from IPFS
-			gateway := os.Getenv("PINATA_GATEWAY")
-			if gateway == "" { gateway = "https://gateway.pinata.cloud" }
-			url := fmt.Sprintf("%s/ipfs/%s", gateway, record.IpfsCID)
-			
-			resp, err := http.Get(url)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				encryptedData, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				
-				// Decrypt
-				decryptedData, err := utils.DecryptAES(encryptedData)
-				if err == nil {
-					// Save to local backup for future use
-					workDir, _ := filepath.Abs(".")
-					cleanName := strings.ReplaceAll(record.Filename, " ", "_")
-					newPath := filepath.Join(workDir, "backup", record.FileID+"_"+cleanName)
-					os.MkdirAll(filepath.Dir(newPath), 0755)
-					
-					if err := os.WriteFile(newPath, decryptedData, 0644); err == nil {
-						fmt.Printf("[FORENSIC] ✅ Recovered original from IPFS → %s\n", newPath)
-						originalPath = newPath
-						// Also update record in background so we don't have to fetch again
-						go func() {
-							col := database.GetCollection("files")
-							ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-							defer cancel()
-							_, _ = col.UpdateOne(ctx, bson.M{"fileId": fileId}, bson.M{"$set": bson.M{"backupPath": newPath}})
-						}()
-					}
-				} else {
-					fmt.Printf("[FORENSIC] ❌ IPFS Decryption failed: %v\n", err)
-				}
-			} else {
-				if err != nil {
-					fmt.Printf("[FORENSIC] ❌ IPFS Fetch failed: %v\n", err)
-				} else {
-					fmt.Printf("[FORENSIC] ❌ IPFS Fetch status: %d\n", resp.StatusCode)
-				}
-			}
-		}
-	}
-
-	if originalPath == "" {
-		fmt.Printf("[FORENSIC]\nBackup path: %s\nVault path: %s\nExists: false\nFileId: %s\n", record.BackupPath, record.VaultPath, fileId)
+	// 2. Fetch original file from IPFS (primary permanent storage)
+	if record.IpfsCID == "" {
+		fmt.Printf("[FORENSIC] ❌ No IPFS CID stored for fileId: %s\n", fileId)
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"error":   "Original backup file not found on disk",
+			"error":   "No IPFS CID found for this file. Re-upload to enable forensic analysis.",
 			"fileId":  fileId,
-			"hint":    "File may have been deleted or never saved locally. Try uploading a new version.",
 		})
 		return
 	}
-	fmt.Printf("[FORENSIC]\nBackup path: %s\nVault path: %s\nExists: true\nFileId: %s\n", originalPath, tamperedPath, fileId)
 
-	// 3. Read original file (required)
-	originalData, err := os.ReadFile(originalPath)
+	fmt.Printf("[FORENSIC] 📡 Fetching original from IPFS CID: %s\n", record.IpfsCID)
+	originalData, err := utils.FetchFromIPFS(record.IpfsCID)
 	if err != nil {
-		fmt.Printf("[FORENSIC] ❌ Cannot read original: %v\n", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot read original file: " + err.Error()})
+		fmt.Printf("[FORENSIC] ❌ IPFS fetch failed: %v\n", err)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"success": false,
+			"error":   "Failed to retrieve original file from IPFS: " + err.Error(),
+			"fileId":  fileId,
+			"hint":    "IPFS gateway may be temporarily unavailable. Try again shortly.",
+		})
 		return
 	}
+	fmt.Printf("[FORENSIC] ✅ IPFS fetch SUCCESS — %d bytes\n", len(originalData))
 
-	// 4. Read tampered/current file (optional — may not exist yet)
-	var tamperedData []byte
-	tamperedMissing := false
-	if tamperedPath == "" {
-		tamperedMissing = true
-		tamperedData = originalData // treat as identical when only one copy exists
-		fmt.Printf("[FORENSIC] ⚠️  Tampered/vault file not found — using original for comparison\n")
-	} else {
-		tamperedData, err = os.ReadFile(tamperedPath)
-		if err != nil {
-			tamperedMissing = true
-			tamperedData = originalData
-			fmt.Printf("[FORENSIC] ⚠️  Cannot read vault file: %v — using original\n", err)
-		}
-	}
+	// 3. Tampered/vault copy — use original as fallback (no local vault)
+	// In production, tamperedData would come from the file the user uploads for comparison.
+	// For now, we compare IPFS original with itself (identical unless re-uploaded).
+	tamperedData := originalData
+	tamperedMissing := true
+	fmt.Printf("[FORENSIC] ⚠️  No separate tampered copy — using original for baseline comparison\n")
 
 	// 5. Forensic analysis
 	origHash := sha256Hex(originalData)
@@ -499,6 +441,8 @@ func ForensicCompare(c *gin.Context) {
 
 // ──────────────────────────────────────────────────────────
 // ForensicRestore — POST /api/restore/:fileId
+// Fetches the sealed original from IPFS, decrypts, and streams to client.
+// Works on Render and any ephemeral deployment — no local disk required.
 // ──────────────────────────────────────────────────────────
 func ForensicRestore(c *gin.Context) {
 	fileId := c.Param("fileId")
@@ -506,7 +450,7 @@ func ForensicRestore(c *gin.Context) {
 	fmt.Printf("[RESTORE] Recovery initiated for fileId: %s\n", fileId)
 
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -515,41 +459,23 @@ func ForensicRestore(c *gin.Context) {
 		return
 	}
 
-	backupPath := findFile(record.BackupPath, fileId, record.Filename, "backup")
-	if backupPath == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Backup source not found on disk"})
+	if record.IpfsCID == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "No IPFS CID found for this file. Cannot restore.",
+			"hint":  "Re-upload the file to store it permanently on IPFS.",
+		})
 		return
 	}
 
-	// Determine destination (vault path)
-	vaultPath := record.VaultPath
-	if vaultPath == "" {
-		// Rebuild the standard vault path if it was empty in old records
-		cleanName := strings.ReplaceAll(record.Filename, " ", "_")
-		vaultPath = filepath.Join(".", "vault", fileId+"_"+cleanName)
-	}
-	absVault, _ := filepath.Abs(vaultPath)
-	os.MkdirAll(filepath.Dir(absVault), 0755)
-
-	// Perform copy (overwrite)
-	source, err := os.Open(backupPath)
+	// Fetch and decrypt original from IPFS
+	fmt.Printf("[RESTORE] 📡 Fetching from IPFS CID: %s\n", record.IpfsCID)
+	originalBytes, err := utils.FetchFromIPFS(record.IpfsCID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot open backup: " + err.Error()})
-		return
-	}
-	defer source.Close()
-
-	// Truncate and overwrite the vault file
-	destination, err := os.OpenFile(absVault, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot write restored file: " + err.Error()})
-		return
-	}
-	defer destination.Close()
-
-	n, err := io.Copy(destination, source)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "File copy failed: " + err.Error()})
+		fmt.Printf("[RESTORE] ❌ IPFS fetch failed: %v\n", err)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "Failed to retrieve original from IPFS: " + err.Error(),
+			"hint":  "IPFS gateway may be temporarily unavailable. Try again shortly.",
+		})
 		return
 	}
 
@@ -557,7 +483,7 @@ func ForensicRestore(c *gin.Context) {
 	now := time.Now()
 	_, _ = col.UpdateOne(ctx, bson.M{"fileId": fileId}, bson.M{
 		"$set": bson.M{
-			"status":     "VALID",
+			"status":     "valid",
 			"updatedAt":  now,
 			"restoredAt": now,
 			"tampered":   false,
@@ -566,14 +492,18 @@ func ForensicRestore(c *gin.Context) {
 
 	// Audit log
 	LogAudit(record.WalletAddress, fileId, record.Filename, "FILE_RESTORED",
-		record.TxHash, 0, fmt.Sprintf("Forensic restore: %d bytes written", n))
+		record.TxHash, 0, fmt.Sprintf("Forensic IPFS restore: %d bytes | CID: %s", len(originalBytes), record.IpfsCID))
 
-	fmt.Printf("[RESTORE] ✅ Restored %d bytes → %s\n", n, absVault)
+	mimeType := record.MimeType
+	if mimeType == "" {
+		mimeType = detectMime(record.Filename)
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":      true,
-		"message":      "File integrity restored from backup",
-		"fileId":       fileId,
-		"bytesWritten": n,
-	})
+	fmt.Printf("[RESTORE] ✅ Streaming %d bytes → client (MIME: %s)\n", len(originalBytes), mimeType)
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="RESTORED_%s"`, record.Filename))
+	c.Header("Content-Type", mimeType)
+	c.Header("Access-Control-Expose-Headers", "Content-Disposition")
+	c.Data(http.StatusOK, mimeType, originalBytes)
 }
+

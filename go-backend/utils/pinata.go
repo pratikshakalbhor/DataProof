@@ -1,84 +1,132 @@
 package utils
 
 import (
-  "bytes"
-  "encoding/json"
-  "fmt"
-  "io"
-  "mime/multipart"
-  "net/http"
-  "os"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"strings"
+	"time"
 )
 
+// PinataResponse is the JSON body returned by Pinata's pinning API.
 type PinataResponse struct {
-  IpfsHash  string `json:"IpfsHash"`
-  PinSize   int    `json:"PinSize"`
-  Timestamp string `json:"Timestamp"`
+	IpfsHash  string `json:"IpfsHash"`
+	PinSize   int    `json:"PinSize"`
+	Timestamp string `json:"Timestamp"`
 }
 
+// UploadToPinata uploads fileData to Pinata/IPFS and returns:
+//   - Full gateway URL  (e.g. https://gateway.pinata.cloud/ipfs/<CID>)
+//   - The raw CID string
+//   - Any error
+//
+// No mock fallback — if PINATA_JWT is missing or the upload fails the error
+// is propagated so the caller can respond with a proper 500/503.
 func UploadToPinata(fileData []byte, filename string) (string, string, error) {
-  jwt := os.Getenv("PINATA_JWT")
-  if jwt == "" {
-    jwt = os.Getenv("PINATA_API_KEY")
-  }
-  if jwt == "" {
-    // Mock CID and URL
-    mockCID := "mock_cid_" + filename
-    return fmt.Sprintf("https://gateway.pinata.cloud/ipfs/%s", mockCID), mockCID, nil
-  }
+	jwt := os.Getenv("PINATA_JWT")
+	if jwt == "" {
+		return "", "", fmt.Errorf("PINATA_JWT environment variable is not set — cannot upload to IPFS")
+	}
 
-  // Multipart form banva
-  body := &bytes.Buffer{}
-  writer := multipart.NewWriter(body)
+	// ── Build multipart/form-data body ───────────────────────────────────────
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
 
-  // File part add kara
-  part, err := writer.CreateFormFile("file", filename)
-  if err != nil {
-    return "", "", err
-  }
-  _, err = io.Copy(part, bytes.NewReader(fileData))
-  if err != nil {
-    return "", "", err
-  }
+	// File field
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return "", "", fmt.Errorf("pinata: create form file: %w", err)
+	}
+	if _, err = io.Copy(part, bytes.NewReader(fileData)); err != nil {
+		return "", "", fmt.Errorf("pinata: write file part: %w", err)
+	}
 
-  // Metadata add kara
-  metadata := fmt.Sprintf(`{"name":"%s","keyvalues":{"app":"CryptoVault"}}`, filename)
-  _ = writer.WriteField("pinataMetadata", metadata)
-  _ = writer.WriteField("pinataOptions", `{"cidVersion":1}`)
-  writer.Close()
+	// Metadata
+	metadata := fmt.Sprintf(`{"name":"%s","keyvalues":{"app":"ChainSeal"}}`, filename)
+	_ = writer.WriteField("pinataMetadata", metadata)
+	_ = writer.WriteField("pinataOptions", `{"cidVersion":1}`)
+	writer.Close()
 
-  // Request banva
-  req, err := http.NewRequest("POST",
-    "https://api.pinata.cloud/pinning/pinFileToIPFS", body)
-  if err != nil {
-    return "", "", err
-  }
+	// ── HTTP request ─────────────────────────────────────────────────────────
+	req, err := http.NewRequest("POST", "https://api.pinata.cloud/pinning/pinFileToIPFS", body)
+	if err != nil {
+		return "", "", fmt.Errorf("pinata: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-  req.Header.Set("Authorization", "Bearer "+jwt)
-  req.Header.Set("Content-Type", writer.FormDataContentType())
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("pinata: HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
 
-  // Send kara
-  client := &http.Client{}
-  resp, err := client.Do(req)
-  if err != nil {
-    return "", "", err
-  }
-  defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("pinata: upload rejected (status %d): %s", resp.StatusCode, string(raw))
+	}
 
-  // Response parse kara
-  var pinataResp PinataResponse
-  if err := json.NewDecoder(resp.Body).Decode(&pinataResp); err != nil {
-    return "", "", err
-  }
+	// ── Parse response ───────────────────────────────────────────────────────
+	var pinataResp PinataResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pinataResp); err != nil {
+		return "", "", fmt.Errorf("pinata: parse response: %w", err)
+	}
+	if pinataResp.IpfsHash == "" {
+		return "", "", fmt.Errorf("pinata: empty CID in response")
+	}
 
-  if pinataResp.IpfsHash == "" {
-    return "", "", fmt.Errorf("pinata upload failed")
-  }
+	gateway := os.Getenv("PINATA_GATEWAY")
+	if gateway == "" {
+		gateway = "https://gateway.pinata.cloud"
+	}
+	// Ensure no trailing slash before appending /ipfs/<CID>
+	gateway = strings.TrimRight(gateway, "/")
 
-  gateway := os.Getenv("PINATA_GATEWAY")
-  if gateway == "" {
-    gateway = "https://gateway.pinata.cloud"
-  }
+	fullURL := fmt.Sprintf("%s/ipfs/%s", gateway, pinataResp.IpfsHash)
+	return fullURL, pinataResp.IpfsHash, nil
+}
 
-  return fmt.Sprintf("%s/ipfs/%s", gateway, pinataResp.IpfsHash), pinataResp.IpfsHash, nil
+// FetchFromIPFS fetches decrypted file bytes for a given CID.
+// It fetches from the Pinata gateway, decrypts with AES, and returns raw bytes.
+func FetchFromIPFS(cid string) ([]byte, error) {
+	if cid == "" {
+		return nil, fmt.Errorf("IPFS: empty CID provided")
+	}
+
+	gateway := os.Getenv("PINATA_GATEWAY")
+	if gateway == "" {
+		gateway = "https://gateway.pinata.cloud"
+	}
+	gateway = strings.TrimRight(gateway, "/")
+
+	url := fmt.Sprintf("%s/ipfs/%s", gateway, cid)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("IPFS: fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("IPFS: gateway returned status %d for CID %s", resp.StatusCode, cid)
+	}
+
+	encryptedData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("IPFS: read response body: %w", err)
+	}
+
+	// Decrypt AES-GCM
+	decrypted, err := DecryptAES(encryptedData)
+	if err != nil {
+		return nil, fmt.Errorf("IPFS: AES decryption failed: %w", err)
+	}
+
+	return decrypted, nil
 }

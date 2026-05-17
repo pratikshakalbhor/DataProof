@@ -17,6 +17,7 @@ func RegisterRoutes(r *gin.Engine) {
 		api.GET("/files", handlers.GetAllFiles)
 		api.GET("/files/archive/all", handlers.GetArchivedFiles)
 		api.GET("/files/:id", handlers.GetFileByID)
+		api.GET("/files/:id/versions", handlers.GetFileVersions)
 		api.PUT("/files/:id/archive", handlers.ArchiveFile)
 		api.POST("/files/:id/restore-archive", handlers.RestoreFromArchive)
 		api.GET("/audit-logs", handlers.GetAuditLogs)
@@ -26,6 +27,7 @@ func RegisterRoutes(r *gin.Engine) {
 		api.PATCH("/files/:id/tx", handlers.UpdateTxHash)
 		api.GET("/files/:id/certificate", handlers.DownloadCertificate)
 		api.GET("/files/:id/download", handlers.DownloadOriginal)
+		api.GET("/files/:id/download-original", handlers.DownloadOriginal)
 
 		// ── Stats ──
 		api.GET("/stats", handlers.GetStats)
