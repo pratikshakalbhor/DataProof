@@ -214,7 +214,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
       const originalName = data?.fileName || filename || 'file';
       const downloadName = `RESTORED_${originalName}`;
 
-      const dlRes = await fetch(`${API}/files/${encodeURIComponent(fileId)}/download-original`);
+      const dlRes = await fetch(`${API}/files/${encodeURIComponent(fileId)}/download`);
       if (dlRes.ok) {
         const blob = await dlRes.blob();
         const url  = URL.createObjectURL(blob);
