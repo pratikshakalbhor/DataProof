@@ -20,6 +20,7 @@ import (
 
 	"cryptovault/database"
 	"cryptovault/models"
+	"cryptovault/utils"
 )
 
 // sha256Hex returns the lowercase hex-encoded SHA-256 of the given bytes.
@@ -171,6 +172,15 @@ func ForensicCompare(c *gin.Context) {
 	ext := filepath.Ext(record.Filename)
 	extLower := strings.ToLower(ext)
 
+	backupDir := os.Getenv("BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = "backup"
+	}
+	vaultDir := os.Getenv("VAULT_DIR")
+	if vaultDir == "" {
+		vaultDir = "vault"
+	}
+
 	// 3. Search backup/ folder for original file
 	foundBackup := ""
 	if record.BackupPath != "" {
@@ -179,15 +189,21 @@ func ForensicCompare(c *gin.Context) {
 		}
 	}
 	if foundBackup == "" {
-		p1 := filepath.Join("backup", fileId+ext)
+		p1 := filepath.Join(backupDir, fileId)
 		if _, err := os.Stat(p1); err == nil {
 			foundBackup = p1
 		}
 	}
 	if foundBackup == "" {
-		p2 := filepath.Join("backup", fileId+"_original"+ext)
+		p2 := filepath.Join(backupDir, fileId+ext)
 		if _, err := os.Stat(p2); err == nil {
 			foundBackup = p2
+		}
+	}
+	if foundBackup == "" {
+		p3 := filepath.Join(backupDir, fileId+"_original"+ext)
+		if _, err := os.Stat(p3); err == nil {
+			foundBackup = p3
 		}
 	}
 
@@ -199,13 +215,13 @@ func ForensicCompare(c *gin.Context) {
 		}
 	}
 	if foundVault == "" {
-		p1 := filepath.Join("vault", fileId+ext)
+		p1 := filepath.Join(vaultDir, fileId+ext)
 		if _, err := os.Stat(p1); err == nil {
 			foundVault = p1
 		}
 	}
 	if foundVault == "" {
-		p2 := filepath.Join("vault", fileId+"_tampered"+ext)
+		p2 := filepath.Join(vaultDir, fileId+"_tampered"+ext)
 		if _, err := os.Stat(p2); err == nil {
 			foundVault = p2
 		}
@@ -224,7 +240,13 @@ func ForensicCompare(c *gin.Context) {
 
 	var backupBytes []byte
 	if foundBackup != "" {
-		backupBytes, _ = os.ReadFile(foundBackup)
+		rawBytes, _ := os.ReadFile(foundBackup)
+		decrypted, err := utils.DecryptAES(rawBytes)
+		if err == nil {
+			backupBytes = decrypted
+		} else {
+			backupBytes = rawBytes
+		}
 	}
 
 	var vaultBytes []byte
@@ -232,14 +254,65 @@ func ForensicCompare(c *gin.Context) {
 		vaultBytes, _ = os.ReadFile(foundVault)
 	}
 
-	// If tampered file was not found, we can use backupBytes as fallback so we don't return completely empty
-	if len(vaultBytes) == 0 && len(backupBytes) > 0 {
-		vaultBytes = backupBytes
-	}
+	// ── Determine if a tampered version actually exists ──
+	tamperedAvailable := len(vaultBytes) > 0
 
 	var originalContent, modifiedContent string
 	var isBinary, isTextComparable bool
 
+	origHash := ""
+	if len(backupBytes) > 0 {
+		origHash = sha256Hex(backupBytes)
+	} else {
+		origHash = record.OriginalHash
+	}
+
+	// If no tampered file exists — return early with tamperedAvailable: false
+	if !tamperedAvailable {
+		// Still provide original content for preview
+		var origPreview string
+		switch extLower {
+		case ".docx":
+			if record.ExtractedText != "" {
+				origPreview = record.ExtractedText
+			} else if foundBackup != "" {
+				origPreview, _ = extractDocxText(foundBackup)
+			}
+		case ".txt", ".json", ".csv", ".md", ".go", ".py":
+			origPreview = string(backupBytes)
+		default:
+			if isTextContent(backupBytes) {
+				origPreview = string(backupBytes)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":            true,
+			"tamperedAvailable":  false,
+			"tamperedMessage":    "No tampered version available yet. Run Verify using a modified file first.",
+			"fileId":             record.FileID,
+			"filename":           record.Filename,
+			"fileName":           record.Filename,
+			"mimeType":           mimeType,
+			"original":           origPreview,
+			"modified":           "",
+			"originalHash":       origHash,
+			"modifiedHash":       "",
+			"txHash":             record.TxHash,
+			"status":             record.Status,
+			"riskScore":          0,
+			"riskLevel":          "SECURE",
+			"isBinary":           false,
+			"isTextComparable":   len(origPreview) > 0,
+			"walletAddress":      record.WalletAddress,
+			"uploadedAt":         record.UploadedAt,
+			"fileSize":           record.FileSize,
+			"isIdentical":        true,
+		})
+		return
+	}
+
+	// ── Tampered file exists — proceed with full comparison ──
 	isBinary = true
 	isTextComparable = false
 
@@ -257,9 +330,6 @@ func ForensicCompare(c *gin.Context) {
 			if record.ExtractedText != "" {
 				originalContent = record.ExtractedText
 				modifiedContent = record.TamperedText
-				if modifiedContent == "" {
-					modifiedContent = originalContent
-				}
 				isBinary = false
 				isTextComparable = true
 			} else {
@@ -294,19 +364,7 @@ func ForensicCompare(c *gin.Context) {
 		}
 	}
 
-	origHash := ""
-	if len(backupBytes) > 0 {
-		origHash = sha256Hex(backupBytes)
-	} else {
-		origHash = record.OriginalHash
-	}
-
-	tampHash := ""
-	if len(vaultBytes) > 0 {
-		tampHash = sha256Hex(vaultBytes)
-	} else {
-		tampHash = origHash
-	}
+	tampHash := sha256Hex(vaultBytes)
 
 	score := riskScore(backupBytes, vaultBytes)
 	level := riskLevel(score)
@@ -322,25 +380,26 @@ func ForensicCompare(c *gin.Context) {
 
 	// 8. Return JSON
 	c.JSON(http.StatusOK, gin.H{
-		"success":          true,
-		"fileId":           record.FileID,
-		"filename":         record.Filename,
-		"fileName":         record.Filename,
-		"mimeType":         mimeType,
-		"original":         originalContent,
-		"modified":         modifiedContent,
-		"originalHash":     origHash,
-		"modifiedHash":     tampHash,
-		"txHash":           record.TxHash,
-		"status":           status,
-		"riskScore":        score,
-		"riskLevel":        level,
-		"isBinary":         isBinary,
-		"isTextComparable": isTextComparable,
-		"walletAddress":    record.WalletAddress,
-		"uploadedAt":       record.UploadedAt,
-		"fileSize":         record.FileSize,
-		"isIdentical":      origHash == tampHash,
+		"success":            true,
+		"tamperedAvailable":  true,
+		"fileId":             record.FileID,
+		"filename":           record.Filename,
+		"fileName":           record.Filename,
+		"mimeType":           mimeType,
+		"original":           originalContent,
+		"modified":           modifiedContent,
+		"originalHash":       origHash,
+		"modifiedHash":       tampHash,
+		"txHash":             record.TxHash,
+		"status":             status,
+		"riskScore":          score,
+		"riskLevel":          level,
+		"isBinary":           isBinary,
+		"isTextComparable":   isTextComparable,
+		"walletAddress":      record.WalletAddress,
+		"uploadedAt":         record.UploadedAt,
+		"fileSize":           record.FileSize,
+		"isIdentical":        origHash == tampHash,
 	})
 }
 
@@ -376,7 +435,13 @@ func ForensicCompareWithUpload(c *gin.Context) {
 
 	var backupBytes []byte
 	if record.BackupPath != "" {
-		backupBytes, _ = os.ReadFile(record.BackupPath)
+		rawBytes, _ := os.ReadFile(record.BackupPath)
+		decrypted, err := utils.DecryptAES(rawBytes)
+		if err == nil {
+			backupBytes = decrypted
+		} else {
+			backupBytes = rawBytes
+		}
 	}
 
 	if len(backupBytes) == 0 {
@@ -399,8 +464,12 @@ func ForensicCompareWithUpload(c *gin.Context) {
 	switch ext {
 	case ".docx":
 		// Save the uploaded tampered file temporarily to do extraction
-		os.MkdirAll("vault", 0755)
-		tamperedTempPath := filepath.Join("vault", fileId+"_temp_compare.docx")
+		vaultDir := os.Getenv("VAULT_DIR")
+		if vaultDir == "" {
+			vaultDir = "vault"
+		}
+		os.MkdirAll(vaultDir, os.ModePerm)
+		tamperedTempPath := filepath.Join(vaultDir, fileId+"_temp_compare.docx")
 		os.WriteFile(tamperedTempPath, tamperedData, 0644)
 		defer os.Remove(tamperedTempPath)
 
@@ -481,7 +550,13 @@ func ForensicRestore(c *gin.Context) {
 
 	var backupBytes []byte
 	if record.BackupPath != "" {
-		backupBytes, _ = os.ReadFile(record.BackupPath)
+		rawBytes, _ := os.ReadFile(record.BackupPath)
+		decrypted, err := utils.DecryptAES(rawBytes)
+		if err == nil {
+			backupBytes = decrypted
+		} else {
+			backupBytes = rawBytes
+		}
 	}
 
 	if len(backupBytes) == 0 {

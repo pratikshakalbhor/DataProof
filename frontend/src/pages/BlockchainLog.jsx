@@ -54,7 +54,8 @@ export default function BlockchainLog({ walletAddress }) {
     setLoading(true);
     try {
       const res = await getAuditLogs(walletAddress);
-      setLogs(res.logs || []);
+      const filteredLogs = (res.logs || []).filter(log => log.eventType !== 'FILE_ARCHIVED');
+      setLogs(filteredLogs);
     } catch (err) {
       console.error('Failed to retrieve forensic logs:', err);
     } finally {

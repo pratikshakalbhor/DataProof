@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAllFiles, getStats } from '../utils/api';
 import {
   Activity, AlertTriangle, Clock, FileText,
-  RefreshCw, UploadCloud, Shield, Zap, ArrowRight
+  RefreshCw, UploadCloud, Shield, Zap, ArrowRight, Radar
 } from 'lucide-react';
 import {
   Tooltip, ResponsiveContainer,
@@ -13,9 +13,30 @@ import {
 export default function Dashboard({ walletAddress }) {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
-  const [stats, setStats] = useState({ total: 0, valid: 0, tampered: 0, recentLogs: [], chartData: [] });
+  const [dataReady, setDataReady] = useState(false);
+  const [stats, setStats] = useState({ total: 0, valid: 0, tampered: 0, archived: 0, recentLogs: [], chartData: [] });
+
+  const containerRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (!Array.isArray(entries) || !entries.length) return;
+      const { width, height } = entries[0].contentRect;
+      setDimensions({ width, height });
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [dataReady]);
 
   const fetchData = useCallback(async () => {
+    setDataReady(false);
     try {
       console.log("Dashboard: Requesting stats for:", walletAddress.toLowerCase());
       const [filesRes, statsRes] = await Promise.all([
@@ -26,33 +47,54 @@ export default function Dashboard({ walletAddress }) {
       console.log("Dashboard API Response (Files):", filesRes);
       console.log("Dashboard API Response (Stats):", statsRes);
 
-      const filesData = filesRes.files || (Array.isArray(filesRes) ? filesRes : []);
+      const filesData = filesRes.files || [];
       setFiles(filesData);
 
-      const s = statsRes.stats || statsRes || {};
+      const s = statsRes.stats;
 
-      // Mock chart data if not provided by backend
-      const chartData = s.chartData || [
-        { day: 'Mon', count: 4 },
-        { day: 'Tue', count: 7 },
-        { day: 'Wed', count: 5 },
-        { day: 'Thu', count: 12 },
-        { day: 'Fri', count: 8 },
-        { day: 'Sat', count: 15 },
-        { day: 'Sun', count: 10 },
-      ];
+      // Group last 7 days of uploads dynamically
+      const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const last7Days = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        last7Days.push({
+          dateStr: d.toDateString(),
+          day: daysOfWeek[d.getDay()],
+          count: 0
+        });
+      }
+
+      filesData.forEach(file => {
+        const fileDate = new Date(file.uploadedAt).toDateString();
+        const found = last7Days.find(item => item.dateStr === fileDate);
+        if (found) {
+          found.count += 1;
+        }
+      });
+
+      const chartData = last7Days.map(item => ({
+        day: item.day,
+        count: item.count
+      }));
+
+      const recentLogs = filesData
+        .slice()
+        .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))
+        .slice(0, 6);
 
       setStats({
-        total: s.total || 0,
-        valid: s.valid || 0,
-        tampered: s.tampered || 0,
-        recentLogs: statsRes.recentLogs || [],
+        total: s.total,
+        valid: s.secure,
+        tampered: s.tampered,
+        archived: s.archived,
+        recentLogs,
         chartData
       });
+      setDataReady(true);
     } catch (err) {
       console.error(err);
-    } finally {
-      // Done
+      // Keep loading to prevent showing zeroed stats on error
     }
   }, [walletAddress]);
 
@@ -63,9 +105,18 @@ export default function Dashboard({ walletAddress }) {
     }
   }, [fetchData, walletAddress]);
 
-  const integrityPct = stats.total > 0 ? Math.round((stats.valid / stats.total) * 100) : 0;
+  const integrityPct = stats.total > 0 ? Math.round((stats.valid / stats.total) * 100) : 100;
   const securityLevel = integrityPct > 90 ? 'High' : integrityPct > 70 ? 'Moderate' : 'Critical';
   const securityColor = integrityPct > 90 ? '#2DD4BF' : integrityPct > 70 ? '#F59E0B' : '#FB7185';
+
+  if (!dataReady) return (
+    <div className="page-inner pf-loading-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
+      <div className="loading-center" style={{ textAlign: 'center' }}>
+        <Radar size={48} className="spin text-cyan" style={{ marginBottom: 16, color: 'var(--accent-cyan)' }} />
+        <div style={{ fontSize: 14, color: 'var(--accent-cyan)', fontWeight: 600, letterSpacing: '0.05em' }}>SYNCHRONIZING SOC MONITOR...</div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="page">
@@ -142,27 +193,38 @@ export default function Dashboard({ walletAddress }) {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginBottom: 24 }}>
-          {/* Chart Section */}
-          <div className="card glass-card" style={{ padding: '20px' }}>
+          {/* Chart Section — rendered only after data is ready to avoid Recharts -1 width/height warning */}
+          <div className="card glass-card" style={{ padding: '20px', overflow: 'visible', minHeight: 380 }}>
             <div className="sec-hdr" style={{ marginBottom: 20 }}>
               <span className="sec-title" style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <Activity size={16} color="var(--accent-cyan)" /> 
                 <span>Verification Velocity</span>
               </span>
             </div>
-            <div style={{ width: '100%', height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={stats.chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                  <XAxis dataKey="day" stroke="rgba(255,255,255,0.2)" fontSize={10} tickLine={false} axisLine={false} />
-                  <YAxis stroke="rgba(255,255,255,0.2)" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
-                    itemStyle={{ color: 'var(--accent-cyan)' }}
-                  />
-                  <Line type="monotone" dataKey="count" stroke="var(--accent-cyan)" strokeWidth={3} dot={{ fill: 'var(--bg-card)', stroke: 'var(--accent-cyan)', strokeWidth: 2, r: 4 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                </LineChart>
-              </ResponsiveContainer>
+            <div 
+              ref={containerRef} 
+              style={{ width: '100%', height: '300px', minHeight: '300px', position: 'relative' }}
+            >
+              {dataReady && stats.chartData && stats.chartData.length > 0 ? (
+                dimensions.width > 0 && dimensions.height > 0 ? (
+                  <ResponsiveContainer width={dimensions.width} height={dimensions.height}>
+                    <LineChart data={stats.chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
+                      <XAxis dataKey="day" stroke="rgba(255,255,255,0.2)" fontSize={10} tickLine={false} axisLine={false} />
+                      <YAxis stroke="rgba(255,255,255,0.2)" fontSize={10} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
+                        itemStyle={{ color: 'var(--accent-cyan)' }}
+                      />
+                      <Line type="monotone" dataKey="count" stroke="var(--accent-cyan)" strokeWidth={3} dot={{ fill: 'var(--bg-card)', stroke: 'var(--accent-cyan)', strokeWidth: 2, r: 4 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : null
+              ) : (
+                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                  {dataReady ? 'No chart data available' : 'Loading...'}
+                </div>
+              )}
             </div>
           </div>
 

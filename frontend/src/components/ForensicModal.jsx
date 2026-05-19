@@ -42,7 +42,8 @@ function RiskRing({ score, level }) {
 }
 
 /* ─── Text Preview Pane ───────────────────────────────────── */
-function TextPreviewPane({ content, label, side }) {
+function TextPreviewPane({ content, label, side, fileName }) {
+  // Only show binary warning if there's genuinely no readable text
   const isBinaryOrEncoded =
     !content ||
     content.startsWith('data:') ||
@@ -58,16 +59,49 @@ function TextPreviewPane({ content, label, side }) {
         <span className="forensic-preview-dot" />
         <span className="forensic-preview-label-text">{label}</span>
         {!isTampered && (
-          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            color: '#14b8a6', letterSpacing: '0.08em' }}>
-            BLOCKCHAIN SEALED
+          <span style={{
+            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+            background: 'rgba(20,184,166,0.15)', color: '#14b8a6',
+            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
+          }}>
+            ✅ ORIGINAL SECURED FILE
           </span>
         )}
         {isTampered && (
-          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            color: '#ef4444', letterSpacing: '0.08em' }}>
-            SUSPICIOUS COPY
+          <span style={{
+            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+            background: 'rgba(239,68,68,0.15)', color: '#ef4444',
+            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
+          }}>
+            🔴 MODIFIED CONTENT DETECTED
           </span>
+        )}
+      </div>
+
+      {/* Panel heading */}
+      <div style={{ padding: '10px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        {!isTampered ? (
+          <>
+            <h3 style={{ color: '#14b8a6', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
+              ORIGINAL BLOCKCHAIN FILE
+            </h3>
+            {fileName && (
+              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
+                Original: {fileName}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <h3 style={{ color: '#ef4444', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
+              TAMPERED MODIFIED FILE
+            </h3>
+            {fileName && (
+              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
+                Tampered: {fileName}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -270,10 +304,14 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                  data?.filename?.endsWith('.docx') ||
                  data?.fileName?.endsWith('.docx');
 
-  const isCritical  = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
-  const isBinary    = data?.isBinary && !isDocx;
-  const canRestore  = (data?.status === 'tampered' || !data?.isIdentical) && !restored;
-  const origName    = data?.fileName || filename || fileId;
+  const isCritical        = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
+  const isBinary          = data?.isBinary && !isDocx;
+  const tamperedAvailable = data?.tamperedAvailable !== false;
+  const canRestore        = (data?.status === 'tampered' || !data?.isIdentical) && !restored && tamperedAvailable;
+  const origName          = data?.fileName || filename || fileId;
+  const hasBothTexts      = origText && modText && origText !== modText;
+  // Tampered filename: use provided or generate a fallback
+  const tamperedName      = data?.tamperedFileName || (origName ? `${origName}_modified` : 'modified_file');
 
   return (
     <AnimatePresence>
@@ -394,14 +432,38 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       </div>
                     )}
 
-                    {!extracting && !data.isTextComparable && !isDocx && (
+                    {/* No tampered version uploaded yet */}
+                    {!extracting && !tamperedAvailable && (
+                      <div className="forensic-no-diff forensic-no-tampered">
+                        <div style={{
+                          width: 56, height: 56, borderRadius: '50%',
+                          background: 'rgba(245,158,11,0.12)', display: 'flex',
+                          alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
+                        }}>
+                          <AlertTriangle size={28} style={{ color: '#f59e0b' }} />
+                        </div>
+                        <h3 style={{ color: '#f59e0b', fontSize: 15, fontWeight: 700, marginBottom: 8 }}>
+                          No Tampered Version Available
+                        </h3>
+                        <p style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.7, maxWidth: 420, margin: '0 auto' }}>
+                          {data.tamperedMessage || 'No tampered version has been detected yet.'}
+                          <br />
+                          To see a forensic diff, go to <strong style={{ color: '#e2e8f0' }}>Verify</strong> and
+                          upload a modified copy of this file. If tampering is detected, the diff will appear here.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Non-text file type */}
+                    {!extracting && tamperedAvailable && !data.isTextComparable && !isDocx && (
                       <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
                         📄 Diff not available for {data.mimeType}
                         <br />Use Preview tab instead.
                       </div>
                     )}
 
-                    {!extracting && (data.isTextComparable || isDocx) && data.isIdentical && (
+                    {/* Files are identical */}
+                    {!extracting && tamperedAvailable && (data.isTextComparable || isDocx) && data.isIdentical && (
                       <div className="forensic-no-diff forensic-identical">
                         <div className="forensic-no-diff-icon"><CheckCircle2 size={32} /></div>
                         <h3>Files Are Identical</h3>
@@ -409,16 +471,63 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       </div>
                     )}
 
-                    {!extracting && (data.isTextComparable || isDocx) && !data.isIdentical && (
+                    {/* Word-level diff viewer — only when both texts exist and differ */}
+                    {!extracting && tamperedAvailable && hasBothTexts && (
                       <>
+                        {/* Forensic Analysis Summary Banner */}
+                        <div style={{
+                          background: 'rgba(234,179,8,0.08)',
+                          border: '1px solid rgba(234,179,8,0.25)',
+                          borderRadius: 12,
+                          padding: '14px 18px',
+                          marginBottom: 14,
+                        }}>
+                          <h4 style={{ color: '#facc15', fontWeight: 800, fontSize: 12,
+                            textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+                            ⚠️ FORENSIC ANALYSIS SUMMARY
+                          </h4>
+                          <p style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, margin: 0 }}>
+                            Blockchain integrity verification <strong style={{ color: '#f87171' }}>failed</strong> because
+                            the uploaded file content differs from the original secured blockchain backup.
+                            Modified words are highlighted in <strong style={{ color: '#f87171' }}>red</strong> (removed)
+                            and <strong style={{ color: '#6ee7b7' }}>green</strong> (added/changed).
+                          </p>
+                        </div>
+
+                        {/* Column headers */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 4px 1fr', gap: 0, marginBottom: 6 }}>
+                          <div style={{ padding: '8px 12px' }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                              letterSpacing: '0.08em', color: '#14b8a6',
+                              background: 'rgba(20,184,166,0.12)', padding: '3px 10px', borderRadius: 4
+                            }}>✅ ORIGINAL BLOCKCHAIN FILE</span>
+                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
+                              Original: {origName}
+                            </div>
+                          </div>
+                          {/* Visual separator */}
+                          <div style={{ background: 'rgba(239,68,68,0.2)' }} />
+                          <div style={{ padding: '8px 12px' }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                              letterSpacing: '0.08em', color: '#ef4444',
+                              background: 'rgba(239,68,68,0.12)', padding: '3px 10px', borderRadius: 4
+                            }}>🔴 TAMPERED MODIFIED FILE</span>
+                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
+                              Tampered: {tamperedName}
+                            </div>
+                          </div>
+                        </div>
+
                         <ReactDiffViewer
                           oldValue={origText}
                           newValue={modText}
                           splitView={true}
                           compareMethod={DiffMethod.WORDS}
                           useDarkTheme={true}
-                          leftTitle="🔒 Original (Blockchain Sealed)"
-                          rightTitle="⚠️ Tampered Version"
+                          leftTitle={`🔒 Original (Blockchain Sealed) — ${origName}`}
+                          rightTitle={`⚠️ Tampered Version — ${tamperedName}`}
                           styles={{
                             variables: {
                               dark: {
@@ -452,12 +561,41 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       content={origText || data.original}
                       label="ORIGINAL SECURED FILE"
                       side="original"
+                      fileName={origName}
                     />
-                    <TextPreviewPane
-                      content={modText || data.modified}
-                      label="TAMPERED FILE"
-                      side="tampered"
-                    />
+                    {/* Visual separator between panels */}
+                    <div style={{ width: 1, background: 'rgba(239,68,68,0.2)', margin: '0 4px', flexShrink: 0 }} />
+                    {tamperedAvailable ? (
+                      <TextPreviewPane
+                        content={modText || data.modified}
+                        label="TAMPERED FILE"
+                        side="tampered"
+                        fileName={tamperedName}
+                      />
+                    ) : (
+                      <div className={`forensic-preview-pane modified`}>
+                        <div className="forensic-preview-label">
+                          <span className="forensic-preview-dot" />
+                          <span className="forensic-preview-label-text">TAMPERED FILE</span>
+                          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+                            color: '#f59e0b', letterSpacing: '0.08em' }}>
+                            NOT YET AVAILABLE
+                          </span>
+                        </div>
+                        <div className="forensic-preview-content" style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          minHeight: 200
+                        }}>
+                          <div style={{ textAlign: 'center', color: '#64748b' }}>
+                            <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: 8 }} />
+                            <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                              No tampered version detected yet.<br />
+                              Use <strong style={{ color: '#e2e8f0' }}>Verify</strong> with a modified file.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

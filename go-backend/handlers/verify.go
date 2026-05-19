@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -172,17 +173,30 @@ func VerifyFile(c *gin.Context) {
 		var tamperedText string
 
 		if status == "TAMPERED" {
-			os.MkdirAll("backup", 0755)
-			os.MkdirAll("vault", 0755)
+			// ── Local Forensic Cache & Evidence Storage ──────────────────────────
+			// Note: Local folders are temporary on Render/Vercel.
+			// IPFS + MongoDB are the permanent storage layers.
+			// backup/ and vault/ are used for local forensic recovery and audit evidence.
+			backupDir := os.Getenv("BACKUP_DIR")
+			if backupDir == "" {
+				backupDir = "backup"
+			}
+			vaultDir := os.Getenv("VAULT_DIR")
+			if vaultDir == "" {
+				vaultDir = "vault"
+			}
+			os.MkdirAll(backupDir, os.ModePerm)
+			os.MkdirAll(vaultDir, os.ModePerm)
 			ext := filepath.Ext(header.Filename)
-			tamperedPath = filepath.Join("vault", record.FileID+"_tampered"+ext)
+			tamperedPath = filepath.Join(vaultDir, record.FileID+"_tampered"+ext)
 			file.Seek(0, 0)
 			if err := saveFileToDisk(file, tamperedPath); err == nil {
+				fmt.Printf("💾 [BACKUP] Tampered evidence saved locally: %s\n", tamperedPath)
 				if strings.ToLower(ext) == ".docx" {
 					tamperedText, _ = extractDocxText(tamperedPath)
 				}
 			} else {
-				fmt.Printf("❌ Failed to save tampered file: %v\n", err)
+				fmt.Printf("❌ Failed to save tampered file to local vault: %v\n", err)
 			}
 		}
 
@@ -200,6 +214,7 @@ func VerifyFile(c *gin.Context) {
 			bson.M{"fileId": record.FileID},
 			bson.M{"$set": updateFields},
 		)
+		fmt.Printf("✅ [MONGODB] Metadata status updated to %s for fileId=%s\n", strings.ToLower(status), record.FileID)
 
 		// Save tamper log
 		if status == "TAMPERED" {
@@ -218,6 +233,7 @@ func VerifyFile(c *gin.Context) {
 				tamperDoc["diff"] = diffResult
 			}
 			tamperCol.InsertOne(ctx, tamperDoc)
+			fmt.Printf("🚨 [MONGODB] Tamper evidence log stored for fileId=%s\n", record.FileID)
 		}
 
 		// Log Audit
@@ -388,28 +404,75 @@ func RestoreFile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Update status to valid
-	_, err := col.UpdateOne(ctx,
+	var record models.FileRecord
+	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File record not found in MongoDB"})
+		return
+	}
+
+	backupDir := os.Getenv("BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = "backup"
+	}
+	vaultDir := os.Getenv("VAULT_DIR")
+	if vaultDir == "" {
+		vaultDir = "vault"
+	}
+
+	backupPath := filepath.Join(backupDir, fileId)
+	encryptedBytes, err := os.ReadFile(backupPath)
+	if err != nil {
+		// Fallback to record.BackupPath if name wasn't matching
+		if record.BackupPath != "" {
+			backupPath = record.BackupPath
+			encryptedBytes, err = os.ReadFile(backupPath)
+		}
+	}
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Encrypted backup file not found on disk: " + err.Error()})
+		return
+	}
+
+	originalBytes, err := utils.DecryptAES(encryptedBytes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Decryption failed: " + err.Error()})
+		return
+	}
+
+	restorePath := filepath.Join(vaultDir, record.Filename)
+	if err := os.WriteFile(restorePath, originalBytes, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save restored file into vault: " + err.Error()})
+		return
+	}
+
+	// ── Log Recovery ──
+	log.Println("Recovery completed:", restorePath)
+
+	// Update status and vault path in MongoDB
+	_, err = col.UpdateOne(ctx,
 		bson.M{"fileId": fileId},
 		bson.M{"$set": bson.M{
 			"status":     "valid",
+			"vaultPath":  restorePath,
 			"verifiedAt": time.Now(),
 		}},
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update MongoDB status: " + err.Error()})
 		return
 	}
 
 	// Create restore notification
-	var record models.FileRecord
-	col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record)
 	CreateNotification(
 		record.WalletAddress,
 		"🔄 File '"+record.Filename+"' restored to original version",
 		"success",
 		fileId,
 	)
+
+	// Forensic Audit log
+	LogAudit(record.WalletAddress, fileId, record.Filename, "FILE_RESTORED", record.TxHash, record.BlockNumber, "Forensic vault recovery completed from encrypted backup.")
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
