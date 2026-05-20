@@ -97,8 +97,8 @@ export default function Verify({ walletAddress, onNotify }) {
     const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
     try {
-      // Step 1: Try download
-      const res = await fetch(`${API}/files/${result.fileId}/download`);
+      // Step 1: Execute restore which now returns the original file directly
+      const res = await fetch(`${API}/restore/${result.fileId}`, { method: 'POST' });
 
       if (res.ok) {
         const blob = await res.blob();
@@ -110,9 +110,6 @@ export default function Verify({ walletAddress, onNotify }) {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
-
-        // Step 2: Update status to valid
-        await fetch(`${API}/restore/${result.fileId}`, { method: 'POST' });
 
         if (typeof onNotify === 'function') onNotify('✅ File restored successfully!', 'success');
         return;

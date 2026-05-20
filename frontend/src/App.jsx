@@ -8,17 +8,20 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Upload from './pages/Upload';
 import Verify from './pages/Verify';
-import MyFiles from './pages/MyFiles';
-import Archive from './pages/Archive';
+import MyFiles from './pages/MyFiles'; 
 import BlockchainLog from './pages/BlockchainLog';
 import FileDetails from './pages/FileDetails';
 import Profile from './pages/Profile';
 import PublicVerify from './pages/PublicVerify';
-import RecoveryHub from './pages/RecoveryHub';
+import RecoveryHub from './pages/RecoveryHub'; 
 
 // Components
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
+
+// Create a context for refresh functionality outside of App component
+const RefreshContext = React.createContext({ refreshKey: 0, triggerRefresh: () => {} });
+const useRefreshContext = () => React.useContext(RefreshContext);
 
 const TITLES = {
   '/dashboard': 'Dashboard',
@@ -41,6 +44,7 @@ function AppLayout({ walletAddress, onLogout }) {
   const title = usePageTitle();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { refreshKey, triggerRefresh } = useRefreshContext(); // Use context for refresh
 
   return (
     <div className={`app-container${mobileOpen ? ' mobile-sidebar-open' : ''}`}>
@@ -56,18 +60,17 @@ function AppLayout({ walletAddress, onLogout }) {
           <div className="page">
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<Dashboard walletAddress={walletAddress} />} />
+              <Route path="/dashboard" element={<Dashboard walletAddress={walletAddress} refreshKey={refreshKey} />} />
               <Route path="/upload" element={<Upload walletAddress={walletAddress} onNavigate={(path) => {
                 if (path === 'files') navigate('/my-files');
                 else navigate(path);
-              }} />} />
-              <Route path="/verify" element={<Verify walletAddress={walletAddress} onNotify={() => {}} />} />
-              <Route path="/my-files" element={<MyFiles walletAddress={walletAddress} />} />
-              <Route path="/archive" element={<Archive walletAddress={walletAddress} />} />
+              }} onRefresh={triggerRefresh} />} />
+              <Route path="/verify" element={<Verify walletAddress={walletAddress} onNotify={() => {}} onRefresh={triggerRefresh} />} />
+              <Route path="/my-files" element={<MyFiles walletAddress={walletAddress} refreshKey={refreshKey} onRefresh={triggerRefresh} />} />
               <Route path="/blockchain-log" element={<BlockchainLog walletAddress={walletAddress} />} />
               <Route path="/files/:id" element={<FileDetails walletAddress={walletAddress} />} />
               <Route path="/profile" element={<Profile walletAddress={walletAddress} onLogout={onLogout} />} />
-              <Route path="/recovery" element={<RecoveryHub walletAddress={walletAddress} onNotify={() => {}} />} />
+              {RecoveryHub ? <Route path="/recovery" element={<RecoveryHub walletAddress={walletAddress} onNotify={() => {}} />} /> : null}
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>
@@ -80,7 +83,10 @@ function AppLayout({ walletAddress, onLogout }) {
 export default function App() {
   const [walletAddress, setWalletAddress] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0); // State to trigger refreshes
   const location = useLocation();
+
+  const triggerRefresh = () => setRefreshKey(prev => prev + 1);
 
   const isPublicRoute = location.pathname.startsWith('/verify-public/');
 
@@ -119,6 +125,9 @@ export default function App() {
   return (
     <>
       <Toaster position="top-right" toastOptions={{
+        // Custom styling for toasts
+        // This ensures toasts look good with the dark theme
+        // and are easily readable.
         style: { background: '#1e293b', color: '#fff', border: '1px solid rgba(255,255,255,0.1)' }
       }} />
       
@@ -129,7 +138,9 @@ export default function App() {
       ) : !walletAddress ? (
         <Login onConnected={handleConnected} />
       ) : (
-        <AppLayout walletAddress={walletAddress} onLogout={handleLogout} />
+        <RefreshContext.Provider value={{ refreshKey, triggerRefresh }}>
+          <AppLayout walletAddress={walletAddress} onLogout={handleLogout} />
+        </RefreshContext.Provider>
       )}
     </>
   );

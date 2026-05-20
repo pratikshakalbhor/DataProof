@@ -232,14 +232,65 @@ func ForensicCompare(c *gin.Context) {
 		vaultBytes, _ = os.ReadFile(foundVault)
 	}
 
-	// If tampered file was not found, we can use backupBytes as fallback so we don't return completely empty
-	if len(vaultBytes) == 0 && len(backupBytes) > 0 {
-		vaultBytes = backupBytes
-	}
+	// ── Determine if a tampered version actually exists ──
+	tamperedAvailable := len(vaultBytes) > 0
 
 	var originalContent, modifiedContent string
 	var isBinary, isTextComparable bool
 
+	origHash := ""
+	if len(backupBytes) > 0 {
+		origHash = sha256Hex(backupBytes)
+	} else {
+		origHash = record.OriginalHash
+	}
+
+	// If no tampered file exists — return early with tamperedAvailable: false
+	if !tamperedAvailable {
+		// Still provide original content for preview
+		var origPreview string
+		switch extLower {
+		case ".docx":
+			if record.ExtractedText != "" {
+				origPreview = record.ExtractedText
+			} else if foundBackup != "" {
+				origPreview, _ = extractDocxText(foundBackup)
+			}
+		case ".txt", ".json", ".csv", ".md", ".go", ".py":
+			origPreview = string(backupBytes)
+		default:
+			if isTextContent(backupBytes) {
+				origPreview = string(backupBytes)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":           true,
+			"tamperedAvailable": false,
+			"tamperedMessage":   "No tampered version available yet. Run Verify using a modified file first.",
+			"fileId":            record.FileID,
+			"filename":          record.Filename,
+			"fileName":          record.Filename,
+			"mimeType":          mimeType,
+			"original":          origPreview,
+			"modified":          "",
+			"originalHash":      origHash,
+			"modifiedHash":      "",
+			"txHash":            record.TxHash,
+			"status":            record.Status,
+			"riskScore":         0,
+			"riskLevel":         "SECURE",
+			"isBinary":          false,
+			"isTextComparable":  len(origPreview) > 0,
+			"walletAddress":     record.WalletAddress,
+			"uploadedAt":        record.UploadedAt,
+			"fileSize":          record.FileSize,
+			"isIdentical":       true,
+		})
+		return
+	}
+
+	// ── Tampered file exists — proceed with full comparison ──
 	isBinary = true
 	isTextComparable = false
 
@@ -257,9 +308,6 @@ func ForensicCompare(c *gin.Context) {
 			if record.ExtractedText != "" {
 				originalContent = record.ExtractedText
 				modifiedContent = record.TamperedText
-				if modifiedContent == "" {
-					modifiedContent = originalContent
-				}
 				isBinary = false
 				isTextComparable = true
 			} else {
@@ -294,19 +342,7 @@ func ForensicCompare(c *gin.Context) {
 		}
 	}
 
-	origHash := ""
-	if len(backupBytes) > 0 {
-		origHash = sha256Hex(backupBytes)
-	} else {
-		origHash = record.OriginalHash
-	}
-
-	tampHash := ""
-	if len(vaultBytes) > 0 {
-		tampHash = sha256Hex(vaultBytes)
-	} else {
-		tampHash = origHash
-	}
+	tampHash := sha256Hex(vaultBytes)
 
 	score := riskScore(backupBytes, vaultBytes)
 	level := riskLevel(score)
@@ -322,25 +358,26 @@ func ForensicCompare(c *gin.Context) {
 
 	// 8. Return JSON
 	c.JSON(http.StatusOK, gin.H{
-		"success":          true,
-		"fileId":           record.FileID,
-		"filename":         record.Filename,
-		"fileName":         record.Filename,
-		"mimeType":         mimeType,
-		"original":         originalContent,
-		"modified":         modifiedContent,
-		"originalHash":     origHash,
-		"modifiedHash":     tampHash,
-		"txHash":           record.TxHash,
-		"status":           status,
-		"riskScore":        score,
-		"riskLevel":        level,
-		"isBinary":         isBinary,
-		"isTextComparable": isTextComparable,
-		"walletAddress":    record.WalletAddress,
-		"uploadedAt":       record.UploadedAt,
-		"fileSize":         record.FileSize,
-		"isIdentical":      origHash == tampHash,
+		"success":           true,
+		"tamperedAvailable": true,
+		"fileId":            record.FileID,
+		"filename":          record.Filename,
+		"fileName":          record.Filename,
+		"mimeType":          mimeType,
+		"original":          originalContent,
+		"modified":          modifiedContent,
+		"originalHash":      origHash,
+		"modifiedHash":      tampHash,
+		"txHash":            record.TxHash,
+		"status":            status,
+		"riskScore":         score,
+		"riskLevel":         level,
+		"isBinary":          isBinary,
+		"isTextComparable":  isTextComparable,
+		"walletAddress":     record.WalletAddress,
+		"uploadedAt":        record.UploadedAt,
+		"fileSize":          record.FileSize,
+		"isIdentical":       origHash == tampHash,
 	})
 }
 
@@ -468,6 +505,7 @@ func ForensicCompareWithUpload(c *gin.Context) {
 // ForensicRestore — POST /api/restore/:fileId
 func ForensicRestore(c *gin.Context) {
 	fileId := c.Param("fileId")
+	fmt.Printf("[Restore] ✅ Restore clicked — fileId: %s\n", fileId)
 
 	col := database.GetCollection("files")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -475,33 +513,62 @@ func ForensicRestore(c *gin.Context) {
 
 	var record models.FileRecord
 	if err := col.FindOne(ctx, bson.M{"fileId": fileId}).Decode(&record); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "File record not found"})
+		fmt.Printf("[Restore] ❌ DB record not found for fileId: %s\n", fileId)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Original backup not found (database record missing)"})
 		return
 	}
 
+	// ── Find original backup file ──────────────────────────────────────────
 	var backupBytes []byte
 	if record.BackupPath != "" {
+		fmt.Printf("[Restore] 🔍 Checking backup path: %s\n", record.BackupPath)
 		backupBytes, _ = os.ReadFile(record.BackupPath)
 	}
 
+	// Fallback: try backup/<fileId><ext> if BackupPath missing or file gone
 	if len(backupBytes) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Original backup file not found on disk"})
+		ext := filepath.Ext(record.Filename)
+		fallbackPath := filepath.Join("backup", fileId+ext)
+		fmt.Printf("[Restore] 🔍 Trying fallback path: %s\n", fallbackPath)
+		backupBytes, _ = os.ReadFile(fallbackPath)
+		if len(backupBytes) > 0 {
+			fmt.Printf("[Restore] ✅ Original backup found at fallback: %s\n", fallbackPath)
+		}
+	}
+
+	if len(backupBytes) == 0 {
+		fmt.Printf("[Restore] ❌ Original backup not found on disk for fileId: %s\n", fileId)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":  "Original backup not found on disk",
+			"fileId": fileId,
+			"hint":   "Backup file may have been deleted from server",
+		})
 		return
 	}
 
+	fmt.Printf("[Restore] ✅ Original backup found — size: %d bytes\n", len(backupBytes))
+
+	// ── Update DB: clear tamper evidence, reset status to valid ───────────
 	now := time.Now()
 	_, _ = col.UpdateOne(ctx, bson.M{"fileId": fileId}, bson.M{
 		"$set": bson.M{
-			"status":    "valid",
-			"updatedAt": now,
+			"status":       "valid",
+			"vaultPath":    "", // Clear tampered path pointer
+			"tamperedText": "", // Clear tampered metadata
+			"updatedAt":    now,
 		},
 	})
+	fmt.Printf("[Restore] ✅ DB status reset to valid for fileId: %s\n", fileId)
 
 	mimeType := record.MimeType
 	if mimeType == "" {
 		mimeType = detectMime(record.Filename)
 	}
 
+	fmt.Printf("[Restore] ✅ Sending original file — name: RESTORED_%s | mime: %s\n",
+		record.Filename, mimeType)
+
+	// ── Stream original backup to client ──────────────────────────────────
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="RESTORED_%s"`, record.Filename))
 	c.Header("Content-Type", mimeType)
 	c.Header("Access-Control-Expose-Headers", "Content-Disposition")

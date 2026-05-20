@@ -27,6 +27,11 @@ type PinataResponse struct {
 // No mock fallback — if PINATA_JWT is missing or the upload fails the error
 // is propagated so the caller can respond with a proper 500/503.
 func UploadToPinata(fileData []byte, filename string) (string, string, error) {
+	// Environment Variable Connection:
+	// Reads PINATA_JWT for authenticated API requests to Pinata.
+	// File: utils/pinata.go
+	// Security: This is a sensitive secret. Storing it in the environment ensures
+	// it only exists in the server's memory.
 	jwt := os.Getenv("PINATA_JWT")
 	if jwt == "" {
 		return "", "", fmt.Errorf("PINATA_JWT environment variable is not set — cannot upload to IPFS")

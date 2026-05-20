@@ -14,6 +14,12 @@ import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import mammoth from 'mammoth';
 import '../styles/ForensicModal.css';
 
+/**
+ * Environment Variable Connection:
+ * File: components/ForensicModal.jsx
+ * Uses process.env.REACT_APP_API_URL to fetch forensic data.
+ * Security Benefit: Avoids hardcoding server IPs, making the UI portable and easier to deploy.
+ */
 const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /* ─── Risk Score Ring ─────────────────────────────────────── */
@@ -213,19 +219,17 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
       // Download the restored original — named RESTORED_<filename>
       const originalName = data?.fileName || filename || 'file';
       const downloadName = `RESTORED_${originalName}`;
-
-      const dlRes = await fetch(`${API}/files/${encodeURIComponent(fileId)}/download`);
-      if (dlRes.ok) {
-        const blob = await dlRes.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = downloadName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
+      
+      // Use the blob directly from the restoration response
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
       setRestored(true);
       onRestored?.();
@@ -270,10 +274,12 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                  data?.filename?.endsWith('.docx') ||
                  data?.fileName?.endsWith('.docx');
 
-  const isCritical  = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
-  const isBinary    = data?.isBinary && !isDocx;
-  const canRestore  = (data?.status === 'tampered' || !data?.isIdentical) && !restored;
-  const origName    = data?.fileName || filename || fileId;
+  const isCritical        = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
+  const isBinary          = data?.isBinary && !isDocx;
+  const tamperedAvailable = data?.tamperedAvailable !== false;
+  const canRestore        = (data?.status === 'tampered' || !data?.isIdentical) && !restored && tamperedAvailable;
+  const origName          = data?.fileName || filename || fileId;
+  const hasBothTexts      = origText && modText && origText !== modText;
 
   return (
     <AnimatePresence>
@@ -394,14 +400,38 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       </div>
                     )}
 
-                    {!extracting && !data.isTextComparable && !isDocx && (
+                    {/* No tampered version uploaded yet */}
+                    {!extracting && !tamperedAvailable && (
+                      <div className="forensic-no-diff forensic-no-tampered">
+                        <div style={{
+                          width: 56, height: 56, borderRadius: '50%',
+                          background: 'rgba(245,158,11,0.12)', display: 'flex',
+                          alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
+                        }}>
+                          <AlertTriangle size={28} style={{ color: '#f59e0b' }} />
+                        </div>
+                        <h3 style={{ color: '#f59e0b', fontSize: 15, fontWeight: 700, marginBottom: 8 }}>
+                          No Tampered Version Available
+                        </h3>
+                        <p style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.7, maxWidth: 420, margin: '0 auto' }}>
+                          {data.tamperedMessage || 'No tampered version has been detected yet.'}
+                          <br />
+                          To see a forensic diff, go to <strong style={{ color: '#e2e8f0' }}>Verify</strong> and
+                          upload a modified copy of this file. If tampering is detected, the diff will appear here.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Non-text file type */}
+                    {!extracting && tamperedAvailable && !data.isTextComparable && !isDocx && (
                       <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
                         📄 Diff not available for {data.mimeType}
                         <br />Use Preview tab instead.
                       </div>
                     )}
 
-                    {!extracting && (data.isTextComparable || isDocx) && data.isIdentical && (
+                    {/* Files are identical */}
+                    {!extracting && tamperedAvailable && (data.isTextComparable || isDocx) && data.isIdentical && (
                       <div className="forensic-no-diff forensic-identical">
                         <div className="forensic-no-diff-icon"><CheckCircle2 size={32} /></div>
                         <h3>Files Are Identical</h3>
@@ -409,38 +439,37 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       </div>
                     )}
 
-                    {!extracting && (data.isTextComparable || isDocx) && !data.isIdentical && (
-                      <>
-                        <ReactDiffViewer
-                          oldValue={origText}
-                          newValue={modText}
-                          splitView={true}
-                          compareMethod={DiffMethod.WORDS}
-                          useDarkTheme={true}
-                          leftTitle="🔒 Original (Blockchain Sealed)"
-                          rightTitle="⚠️ Tampered Version"
-                          styles={{
-                            variables: {
-                              dark: {
-                                diffViewerBackground:    '#0d1117',
-                                diffViewerColor:         '#e2e8f0',
-                                addedBackground:         'rgba(20,184,166,0.15)',
-                                addedColor:              '#d1fae5',
-                                removedBackground:       'rgba(239,68,68,0.15)',
-                                removedColor:            '#fecaca',
-                                wordAddedBackground:     'rgba(20,184,166,0.5)',
-                                wordRemovedBackground:   'rgba(239,68,68,0.5)',
-                                addedGutterBackground:   'rgba(20,184,166,0.2)',
-                                removedGutterBackground: 'rgba(239,68,68,0.2)',
-                                gutterBackground:        '#0a0f1a',
-                                gutterColor:             '#475569',
-                              }
-                            },
-                            line:   { fontFamily: 'monospace', fontSize: '12px' },
-                            gutter: { minWidth: '40px' },
-                          }}
-                        />
-                      </>
+                    {/* Word-level diff viewer — only when both texts exist and differ */}
+                    {!extracting && tamperedAvailable && hasBothTexts && (
+                      <ReactDiffViewer
+                        oldValue={origText}
+                        newValue={modText}
+                        splitView={true}
+                        compareMethod={DiffMethod.WORDS}
+                        useDarkTheme={true}
+                        leftTitle="🔒 Original (Blockchain Sealed)"
+                        rightTitle="⚠️ Tampered Version"
+                        styles={{
+                          variables: {
+                            dark: {
+                              diffViewerBackground:    '#0d1117',
+                              diffViewerColor:         '#e2e8f0',
+                              addedBackground:         'rgba(20,184,166,0.15)',
+                              addedColor:              '#d1fae5',
+                              removedBackground:       'rgba(239,68,68,0.15)',
+                              removedColor:            '#fecaca',
+                              wordAddedBackground:     'rgba(20,184,166,0.5)',
+                              wordRemovedBackground:   'rgba(239,68,68,0.5)',
+                              addedGutterBackground:   'rgba(20,184,166,0.2)',
+                              removedGutterBackground: 'rgba(239,68,68,0.2)',
+                              gutterBackground:        '#0a0f1a',
+                              gutterColor:             '#475569',
+                            }
+                          },
+                          line:   { fontFamily: 'monospace', fontSize: '12px' },
+                          gutter: { minWidth: '40px' },
+                        }}
+                      />
                     )}
                   </div>
                 )}
@@ -453,11 +482,36 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       label="ORIGINAL SECURED FILE"
                       side="original"
                     />
-                    <TextPreviewPane
-                      content={modText || data.modified}
-                      label="TAMPERED FILE"
-                      side="tampered"
-                    />
+                    {tamperedAvailable ? (
+                      <TextPreviewPane
+                        content={modText || data.modified}
+                        label="TAMPERED FILE"
+                        side="tampered"
+                      />
+                    ) : (
+                      <div className={`forensic-preview-pane modified`}>
+                        <div className="forensic-preview-label">
+                          <span className="forensic-preview-dot" />
+                          <span className="forensic-preview-label-text">TAMPERED FILE</span>
+                          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+                            color: '#f59e0b', letterSpacing: '0.08em' }}>
+                            NOT YET AVAILABLE
+                          </span>
+                        </div>
+                        <div className="forensic-preview-content" style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          minHeight: 200
+                        }}>
+                          <div style={{ textAlign: 'center', color: '#64748b' }}>
+                            <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: 8 }} />
+                            <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                              No tampered version detected yet.<br />
+                              Use <strong style={{ color: '#e2e8f0' }}>Verify</strong> with a modified file.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

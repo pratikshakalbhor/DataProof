@@ -9,6 +9,11 @@ import { pageVariants, cardVariants, fadeIn } from '../utils/animations';
 import { sealFileOnBlockchain, getTxUrl } from '../utils/blockchain';
 import '../styles/Upload.css';
 
+/**
+ * Environment Variable Connection:
+ * REACT_APP_API_URL is injected here at build time. 
+ * This allows the frontend to communicate with the backend across different environments.
+ */
 const API = (process.env.REACT_APP_API_URL || 'http://localhost:5000').replace(/\/api$/, '') + '/api';
 
 const STEPS = [
@@ -20,7 +25,7 @@ const STEPS = [
   { pct: 100, label: 'Vault Secured!',                   icon: <CheckCircle2 size={14} /> },
 ];
 
-export default function Upload({ walletAddress, onNavigate }) {
+export default function Upload({ walletAddress, onNavigate, onRefresh }) {
   const [file,     setFile]     = useState(null);
   const [drag,     setDrag]     = useState(false);
   const [progress, setProgress] = useState(0);
@@ -43,18 +48,51 @@ export default function Upload({ walletAddress, onNavigate }) {
     }
 
     // ── Pre-flight: Ensure MetaMask is unlocked & connected ──
+    // This block now ensures MetaMask is connected AND on the correct Sepolia network
     if (window.ethereum) {
       try {
         await window.ethereum.request({ method: 'eth_requestAccounts' });
+
+        // Check and switch to Sepolia Testnet if not already on it
+        const expectedChainId = '0xaa36a7'; // Sepolia Testnet Chain ID
+        const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+
+        if (currentChainId !== expectedChainId) {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: expectedChainId }],
+            });
+          } catch (switchError) {
+            // This error code indicates that the chain has not been added to MetaMask.
+            if (switchError.code === 4902) {
+              // Try to add the Sepolia network
+              await window.ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: expectedChainId,
+                  chainName: 'Sepolia Testnet',
+                  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                  rpcUrls: ['https://rpc.sepolia.org'],
+                  blockExplorerUrls: ['https://sepolia.etherscan.io'],
+                }],
+              });
+            } else {
+              // User rejected chain switch or other error
+              setError('Please switch to the Sepolia Testnet in MetaMask to proceed.');
+              return;
+            }
+          }
+        }
       } catch (e) {
-        setError('MetaMask connection rejected. Please unlock MetaMask and try again.');
+        // User rejected account connection or other connection error
+        setError('MetaMask connection rejected or failed. Please unlock MetaMask and try again.');
         return;
       }
     } else {
       setError('MetaMask not found! Please install MetaMask browser extension.');
       return;
     }
-
     setUploading(true); setError(''); setResult(null);
 
     try {
@@ -88,6 +126,7 @@ export default function Upload({ walletAddress, onNavigate }) {
           txHash:    uploadData.txHash || 'existing',
           duplicate: true,
         });
+        onRefresh(); // Trigger global refresh for dashboard/my files
         setUploading(false);
         return;
       }
@@ -118,6 +157,7 @@ export default function Upload({ walletAddress, onNavigate }) {
         if (bcErr.message?.includes('user rejected') || bcErr.code === 4001) {
           setError('MetaMask transaction was rejected. File saved to vault but NOT sealed on blockchain.');
         }
+        onRefresh(); // Even if rejected, file might be saved to DB, so refresh
       }
 
       // Step 5 — Save txHash to backend (only if confirmed)
@@ -144,6 +184,7 @@ export default function Upload({ walletAddress, onNavigate }) {
       step(5); await delay(400);
 
       setResult({ fileId, fileHash, filename, fileSize, txHash });
+      onRefresh(); // Trigger global refresh for dashboard/my files
       setUploading(false);
 
     } catch (err) {

@@ -10,7 +10,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid
 } from 'recharts';
 
-export default function Dashboard({ walletAddress }) {
+export default function Dashboard({ walletAddress, refreshKey }) {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [stats, setStats] = useState({ total: 0, valid: 0, tampered: 0, recentLogs: [], chartData: [] });
@@ -54,14 +54,14 @@ export default function Dashboard({ walletAddress }) {
     } finally {
       // Done
     }
-  }, [walletAddress]);
+  }, [walletAddress, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { 
     if (walletAddress) {
       console.log("Dashboard: Fetching for wallet:", walletAddress.toLowerCase());
       fetchData(); 
     }
-  }, [fetchData, walletAddress]);
+  }, [fetchData, walletAddress, refreshKey]); // Add refreshKey to dependencies
 
   const integrityPct = stats.total > 0 ? Math.round((stats.valid / stats.total) * 100) : 0;
   const securityLevel = integrityPct > 90 ? 'High' : integrityPct > 70 ? 'Moderate' : 'Critical';

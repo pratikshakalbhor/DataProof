@@ -7,7 +7,6 @@ import {
   Activity,
   User,
   LogOut,
-  Archive,
   RotateCcw,
 } from 'lucide-react';
 
@@ -31,13 +30,12 @@ const NAV_GROUPS = [
     group: 'Ledger',
     items: [
       { path: '/blockchain-log', label: 'Blockchain Log', icon: Activity },
-      { path: '/archive',        label: 'Forensic Archive', icon: Archive },
     ]
   },
   {
     group: 'Account',
     items: [
-      { path: '/profile',        label: 'Settings/profile', icon: User },
+      { path: '/profile',        label: 'Profile', icon: User },
     ]
   }
 ];

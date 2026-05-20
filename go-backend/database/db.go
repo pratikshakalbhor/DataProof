@@ -15,6 +15,11 @@ import (
 var DB *mongo.Database
 
 func ConnectDB() (*mongo.Client, error) {
+	// Environment Variable Connection:
+	// os.Getenv("MONGO_URI") reads the connection string from the OS environment at runtime.
+	// File: database/db.go
+	// Security Benefit: Protects the MongoDB username/password from being leaked in version control.
+	// It allows switching between local and cloud databases without code changes.
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = os.Getenv("MONGODB_URI") // Fallback
@@ -42,7 +47,7 @@ func ConnectDB() (*mongo.Client, error) {
 	// Connection test karo
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pingCancel()
-	
+
 	err = client.Ping(pingCtx, nil)
 	if err != nil {
 		return nil, err

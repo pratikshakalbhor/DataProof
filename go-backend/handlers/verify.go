@@ -384,19 +384,24 @@ func readLines(r io.Reader) []string {
 func RestoreFile(c *gin.Context) {
 	fileId := c.Param("id")
 	
+	fmt.Printf("[Restore] Internal Restore request received for fileId: %s\n", fileId)
+
 	col := database.GetCollection("files")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Update status to valid
+	// Update status to valid and clear evidence of tampering
 	_, err := col.UpdateOne(ctx,
 		bson.M{"fileId": fileId},
 		bson.M{"$set": bson.M{
-			"status":     "valid",
-			"verifiedAt": time.Now(),
+			"status":       "valid",
+			"vaultPath":    "",
+			"tamperedText": "",
+			"verifiedAt":   time.Now(),
 		}},
 	)
 	if err != nil {
+		fmt.Printf("[Restore] ❌ DB update failed: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -410,6 +415,8 @@ func RestoreFile(c *gin.Context) {
 		"success",
 		fileId,
 	)
+
+	fmt.Printf("[Restore] ✅ Internal status restore completed for fileId: %s\n", fileId)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
