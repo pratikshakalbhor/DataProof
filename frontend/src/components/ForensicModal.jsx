@@ -48,7 +48,8 @@ function RiskRing({ score, level }) {
 }
 
 /* ─── Text Preview Pane ───────────────────────────────────── */
-function TextPreviewPane({ content, label, side }) {
+function TextPreviewPane({ content, label, side, fileName }) {
+  // Only show binary warning if there's genuinely no readable text
   const isBinaryOrEncoded =
     !content ||
     content.startsWith('data:') ||
@@ -64,16 +65,49 @@ function TextPreviewPane({ content, label, side }) {
         <span className="forensic-preview-dot" />
         <span className="forensic-preview-label-text">{label}</span>
         {!isTampered && (
-          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            color: '#14b8a6', letterSpacing: '0.08em' }}>
-            BLOCKCHAIN SEALED
+          <span style={{
+            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+            background: 'rgba(20,184,166,0.15)', color: '#14b8a6',
+            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
+          }}>
+            ✅ ORIGINAL SECURED FILE
           </span>
         )}
         {isTampered && (
-          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            color: '#ef4444', letterSpacing: '0.08em' }}>
-            SUSPICIOUS COPY
+          <span style={{
+            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
+            background: 'rgba(239,68,68,0.15)', color: '#ef4444',
+            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
+          }}>
+            🔴 MODIFIED CONTENT DETECTED
           </span>
+        )}
+      </div>
+
+      {/* Panel heading */}
+      <div style={{ padding: '10px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        {!isTampered ? (
+          <>
+            <h3 style={{ color: '#14b8a6', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
+              ORIGINAL BLOCKCHAIN FILE
+            </h3>
+            {fileName && (
+              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
+                Original: {fileName}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <h3 style={{ color: '#ef4444', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
+              TAMPERED MODIFIED FILE
+            </h3>
+            {fileName && (
+              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
+                Tampered: {fileName}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -280,6 +314,8 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
   const canRestore        = (data?.status === 'tampered' || !data?.isIdentical) && !restored && tamperedAvailable;
   const origName          = data?.fileName || filename || fileId;
   const hasBothTexts      = origText && modText && origText !== modText;
+  // Tampered filename: use provided or generate a fallback
+  const tamperedName      = data?.tamperedFileName || (origName ? `${origName}_modified` : 'modified_file');
 
   return (
     <AnimatePresence>
@@ -441,6 +477,7 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
 
                     {/* Word-level diff viewer — only when both texts exist and differ */}
                     {!extracting && tamperedAvailable && hasBothTexts && (
+<<<<<<< HEAD
                       <ReactDiffViewer
                         oldValue={origText}
                         newValue={modText}
@@ -470,6 +507,126 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                           gutter: { minWidth: '40px' },
                         }}
                       />
+=======
+                      <>
+                        {/* Forensic Analysis Summary Banner */}
+                        <div style={{
+                          background: 'rgba(234,179,8,0.08)',
+                          border: '1px solid rgba(234,179,8,0.25)',
+                          borderRadius: 12,
+                          padding: '14px 18px',
+                          marginBottom: 14,
+                        }}>
+                          <h4 style={{ color: '#facc15', fontWeight: 800, fontSize: 12,
+                            textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+                            ⚠️ FORENSIC ANALYSIS SUMMARY
+                          </h4>
+                          <p style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, margin: 0 }}>
+                            Blockchain integrity verification <strong style={{ color: '#f87171' }}>failed</strong> because
+                            the uploaded file content differs from the original secured blockchain backup.
+                            Modified words are highlighted in <strong style={{ color: '#f87171' }}>red</strong> (removed)
+                            and <strong style={{ color: '#6ee7b7' }}>green</strong> (added/changed).
+                          </p>
+                        </div>
+
+                        {/* Show diff summary statistics if available */}
+                        {data.diffSummary && (
+                          <div style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 10, marginBottom: 14
+                          }}>
+                            <div style={{
+                              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fca5a5' }}>
+                                {data.diffSummary.removed}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#f87171', fontWeight: 700, marginTop: 2 }}>
+                                REMOVED LINES
+                              </div>
+                            </div>
+                            <div style={{
+                              background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#99f6e4' }}>
+                                {data.diffSummary.added}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#14b8a6', fontWeight: 700, marginTop: 2 }}>
+                                ADDED LINES
+                              </div>
+                            </div>
+                            <div style={{
+                              background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fcd34d' }}>
+                                {data.diffSummary.modified}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#facc15', fontWeight: 700, marginTop: 2 }}>
+                                MODIFIED LINES
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Column headers */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 4px 1fr', gap: 0, marginBottom: 6 }}>
+                          <div style={{ padding: '8px 12px' }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                              letterSpacing: '0.08em', color: '#14b8a6',
+                              background: 'rgba(20,184,166,0.12)', padding: '3px 10px', borderRadius: 4
+                            }}>✅ ORIGINAL BLOCKCHAIN FILE</span>
+                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
+                              Original: {origName}
+                            </div>
+                          </div>
+                          {/* Visual separator */}
+                          <div style={{ background: 'rgba(239,68,68,0.2)' }} />
+                          <div style={{ padding: '8px 12px' }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                              letterSpacing: '0.08em', color: '#ef4444',
+                              background: 'rgba(239,68,68,0.12)', padding: '3px 10px', borderRadius: 4
+                            }}>🔴 TAMPERED MODIFIED FILE</span>
+                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
+                              Tampered: {tamperedName}
+                            </div>
+                          </div>
+                        </div>
+
+                        <ReactDiffViewer
+                          oldValue={origText}
+                          newValue={modText}
+                          splitView={true}
+                          compareMethod={DiffMethod.WORDS}
+                          useDarkTheme={true}
+                          leftTitle={`🔒 Original (Blockchain Sealed) — ${origName}`}
+                          rightTitle={`⚠️ Tampered Version — ${tamperedName}`}
+                          styles={{
+                            variables: {
+                              dark: {
+                                diffViewerBackground:    '#0d1117',
+                                diffViewerColor:         '#e2e8f0',
+                                addedBackground:         'rgba(20,184,166,0.15)',
+                                addedColor:              '#d1fae5',
+                                removedBackground:       'rgba(239,68,68,0.15)',
+                                removedColor:            '#fecaca',
+                                wordAddedBackground:     'rgba(20,184,166,0.5)',
+                                wordRemovedBackground:   'rgba(239,68,68,0.5)',
+                                addedGutterBackground:   'rgba(20,184,166,0.2)',
+                                removedGutterBackground: 'rgba(239,68,68,0.2)',
+                                gutterBackground:        '#0a0f1a',
+                                gutterColor:             '#475569',
+                              }
+                            },
+                            line:   { fontFamily: 'monospace', fontSize: '12px' },
+                            gutter: { minWidth: '40px' },
+                          }}
+                        />
+                      </>
                     )}
                   </div>
                 )}
@@ -481,12 +638,16 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                       content={origText || data.original}
                       label="ORIGINAL SECURED FILE"
                       side="original"
+                      fileName={origName}
                     />
+                    {/* Visual separator between panels */}
+                    <div style={{ width: 1, background: 'rgba(239,68,68,0.2)', margin: '0 4px', flexShrink: 0 }} />
                     {tamperedAvailable ? (
                       <TextPreviewPane
                         content={modText || data.modified}
                         label="TAMPERED FILE"
                         side="tampered"
+                        fileName={tamperedName}
                       />
                     ) : (
                       <div className={`forensic-preview-pane modified`}>

@@ -24,6 +24,7 @@ func RegisterRoutes(r *gin.Engine) {
 
 		// ── Files — SPECIFIC routes AADHI ──
 		api.GET("/files", handlers.GetAllFiles)
+		api.GET("/files", handlers.GetAllFiles)
 		api.GET("/files/trash/all", handlers.GetTrashFiles)
 		api.GET("/files/archive/all", handlers.GetArchivedFiles)
 
@@ -50,6 +51,7 @@ func RegisterRoutes(r *gin.Engine) {
 
 		// ── Public ──
 		api.GET("/public/verify/:id", handlers.PublicVerify)
+		api.GET("/tamper-logs", handlers.GetTamperLogs)
 		api.GET("/tamper-logs", handlers.GetTamperLogs)
 		api.GET("/audit-logs", handlers.GetAuditLogs)
 	}

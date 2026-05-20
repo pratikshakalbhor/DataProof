@@ -112,10 +112,14 @@ export const sealFileOnBlockchain = async (fileData) => {
       fileSize,
       { gasLimit: 800000 } // Bypass ethers.js gas estimation issues
     );
-    console.log('[blockchain] TX sent:', tx.hash);
+    console.log('[blockchain] 🔗 TX sent:', tx.hash);
+    console.log('[blockchain] ⏳ Awaiting blockchain confirmation...');
 
     const receipt = await tx.wait();
-    console.log('[blockchain] TX confirmed:', receipt.hash, '| block:', receipt.blockNumber);
+    console.log('[blockchain] ✅ TX confirmed:', receipt.hash);
+    console.log('[blockchain] 📦 Block:', receipt.blockNumber);
+    console.log('[blockchain] ⛽ Gas Used:', receipt.gasUsed?.toString() || '0');
+    console.log('[blockchain] 🎯 Transaction status: SUCCESS');
 
     return {
       success:     true,
@@ -124,11 +128,11 @@ export const sealFileOnBlockchain = async (fileData) => {
       gasUsed:     receipt.gasUsed?.toString() || '0',
     };
   } catch (err) {
-    console.error('[blockchain] Smart contract revert error:', err);
+    console.error('[blockchain] ❌ Smart contract revert error:', err);
     if (err.data && err.data.message) {
-      console.error('[blockchain] Revert reason:', err.data.message);
+      console.error('[blockchain] 🚨 Revert reason:', err.data.message);
     } else if (err.reason) {
-      console.error('[blockchain] Revert reason:', err.reason);
+      console.error('[blockchain] 🚨 Revert reason:', err.reason);
     }
     throw err;
   }

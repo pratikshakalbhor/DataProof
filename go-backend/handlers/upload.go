@@ -124,7 +124,7 @@ func UploadFile(c *gin.Context) {
 		})
 		return
 	}
-	log.Printf("📦 IPFS Upload SUCCESS — CID: %s | URL: %s", ipfsCID, ipfsURL)
+	log.Printf("📦 [UPLOAD] File uploaded to IPFS — CID: %s | URL: %s", ipfsCID, ipfsURL)
 
 	// Allow frontend override URL
 	if frontendURL := c.PostForm("encryptedUrl"); frontendURL != "" {
@@ -152,9 +152,20 @@ func UploadFile(c *gin.Context) {
 		}
 	}
 
-	// Create backup/ and vault/ folders if not exist
-	os.MkdirAll("backup", 0755)
-	os.MkdirAll("vault", 0755)
+	// ── 7.5 Local Forensic Cache (Demo/Recovery) ─────────────────────────────
+	// Note: Local folders are temporary on Render/Vercel.
+	// IPFS + MongoDB are the permanent storage layers.
+	// backup/ and vault/ are used for local forensic recovery and audit evidence.
+	backupDir := os.Getenv("BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = "backup"
+	}
+	vaultDir := os.Getenv("VAULT_DIR")
+	if vaultDir == "" {
+		vaultDir = "vault"
+	}
+	os.MkdirAll(backupDir, os.ModePerm)
+	os.MkdirAll(vaultDir, os.ModePerm)
 
 	// ── 8. Version update or new record ──────────────────────────────────────
 	if parentFileId != "" {
@@ -163,15 +174,27 @@ func UploadFile(c *gin.Context) {
 		if err := collection.FindOne(ctx, bson.M{"fileId": parentFileId}).Decode(&parent); err == nil {
 			newVersion := parent.Version + 1
 			ext := filepath.Ext(header.Filename)
-			backupPath := filepath.Join("backup", parentFileId+ext)
-			os.WriteFile(backupPath, fileBytes, 0644)
+
+			vaultPath := filepath.Join(vaultDir, header.Filename)
+			if err := os.WriteFile(vaultPath, fileBytes, 0644); err != nil {
+				log.Printf("❌ Failed to write raw file to vault: %v", err)
+			}
+
+			backupPath := filepath.Join(backupDir, parentFileId)
+			if err := os.WriteFile(backupPath, encryptedBytes, 0644); err != nil {
+				log.Printf("❌ Failed to write encrypted backup: %v", err)
+			}
+
+			log.Println("File uploaded:", header.Filename)
+			log.Println("Backup created:", backupPath)
+			log.Println("Stored in vault:", vaultPath)
 
 			var extractedText string
 			if strings.ToLower(ext) == ".docx" {
-				text, err := extractDocxText(backupPath)
+				text, err := extractDocxText(vaultPath)
 				if err == nil {
 					extractedText = text
-					txtPath := filepath.Join("backup", parentFileId+"_text.txt")
+					txtPath := filepath.Join(backupDir, parentFileId+"_text.txt")
 					os.WriteFile(txtPath, []byte(text), 0644)
 				}
 			}
@@ -189,6 +212,7 @@ func UploadFile(c *gin.Context) {
 						"version":       newVersion,
 						"uploadedAt":    time.Now(),
 						"backupPath":    backupPath,
+						"vaultPath":     vaultPath,
 						"extractedText": extractedText,
 					},
 					"$push": bson.M{
@@ -218,15 +242,27 @@ func UploadFile(c *gin.Context) {
 		}
 
 		ext := filepath.Ext(header.Filename)
-		backupPath := filepath.Join("backup", fileID+ext)
-		os.WriteFile(backupPath, fileBytes, 0644)
+
+		vaultPath := filepath.Join(vaultDir, header.Filename)
+		if err := os.WriteFile(vaultPath, fileBytes, 0644); err != nil {
+			log.Printf("❌ Failed to write raw file to vault: %v", err)
+		}
+
+		backupPath := filepath.Join(backupDir, fileID)
+		if err := os.WriteFile(backupPath, encryptedBytes, 0644); err != nil {
+			log.Printf("❌ Failed to write encrypted backup: %v", err)
+		}
+
+		log.Println("File uploaded:", header.Filename)
+		log.Println("Backup created:", backupPath)
+		log.Println("Stored in vault:", vaultPath)
 
 		var extractedText string
 		if strings.ToLower(ext) == ".docx" {
-			text, err := extractDocxText(backupPath)
+			text, err := extractDocxText(vaultPath)
 			if err == nil {
 				extractedText = text
-				txtPath := filepath.Join("backup", fileID+"_text.txt")
+				txtPath := filepath.Join(backupDir, fileID+"_text.txt")
 				os.WriteFile(txtPath, []byte(text), 0644)
 			}
 		}
@@ -246,7 +282,7 @@ func UploadFile(c *gin.Context) {
 			TxHash:        txHash,
 			Status:        "valid",
 			BackupPath:    backupPath,
-			VaultPath:     "",
+			VaultPath:     vaultPath,
 			ExtractedText: extractedText,
 			TamperedText:  "",
 			ExpiryDate:    expiryDate,
@@ -262,13 +298,14 @@ func UploadFile(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database save failed: " + err.Error()})
 			return
 		}
-		log.Printf("✅ MongoDB INSERT SUCCESS: fileId=%s, _id=%v", record.FileID, result.InsertedID)
+		log.Printf("✅ [MONGODB] Metadata stored: fileId=%s, _id=%v", record.FileID, result.InsertedID)
 	}
 
 	// ── 9. Notifications & audit ─────────────────────────────────────────────
 	NotifyUpload(wallet, header.Filename, fileID)
 	LogAudit(wallet, fileID, header.Filename, "FILE_UPLOADED", txHash, 0,
 		"File encrypted and stored on IPFS (CID: "+ipfsCID+")")
+	log.Printf("🔗 [BLOCKCHAIN] Hash ready to seal on blockchain for file: %s", fileID)
 
 	// ── 10. Response ─────────────────────────────────────────────────────────
 	c.JSON(http.StatusCreated, gin.H{

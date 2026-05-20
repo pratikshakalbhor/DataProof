@@ -8,7 +8,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Upload from './pages/Upload';
 import Verify from './pages/Verify';
-import MyFiles from './pages/MyFiles'; 
+import MyFiles from './pages/MyFiles';
 import BlockchainLog from './pages/BlockchainLog';
 import FileDetails from './pages/FileDetails';
 import Profile from './pages/Profile';
@@ -30,7 +30,6 @@ const TITLES = {
   '/verify': 'Verify Integrity',
   '/recovery': 'Recovery Hub',
   '/blockchain-log': 'Blockchain Log',
-  '/archive': 'Forensic Archive',
   '/profile': 'Profile',
 };
 
@@ -67,6 +66,7 @@ function AppLayout({ walletAddress, onLogout }) {
               }} onRefresh={triggerRefresh} />} />
               <Route path="/verify" element={<Verify walletAddress={walletAddress} onNotify={() => {}} onRefresh={triggerRefresh} />} />
               <Route path="/my-files" element={<MyFiles walletAddress={walletAddress} refreshKey={refreshKey} onRefresh={triggerRefresh} />} />
+              <Route path="/archive" element={<Navigate to="/dashboard" replace />} />
               <Route path="/blockchain-log" element={<BlockchainLog walletAddress={walletAddress} />} />
               <Route path="/files/:id" element={<FileDetails walletAddress={walletAddress} />} />
               <Route path="/profile" element={<Profile walletAddress={walletAddress} onLogout={onLogout} />} />
@@ -91,12 +91,13 @@ export default function App() {
   const isPublicRoute = location.pathname.startsWith('/verify-public/');
 
   useEffect(() => {
-    const saved = localStorage.getItem('walletAddress');
-    if (saved) setWalletAddress(saved);
+    // Always start with a clean state on fresh startup/page load
+    localStorage.removeItem('walletAddress');
+    setWalletAddress(null);
     setLoading(false);
 
     if (window.ethereum) {
-      window.ethereum.on('accountsChanged', (accs) => {
+      const handleAccounts = (accs) => {
         if (accs.length === 0) {
           localStorage.removeItem('walletAddress');
           setWalletAddress(null);
@@ -104,7 +105,15 @@ export default function App() {
           setWalletAddress(accs[0]);
           localStorage.setItem('walletAddress', accs[0]);
         }
-      });
+      };
+
+      window.ethereum.on('accountsChanged', handleAccounts);
+
+      return () => {
+        if (window.ethereum.removeListener) {
+          window.ethereum.removeListener('accountsChanged', handleAccounts);
+        }
+      };
     }
   }, []);
 

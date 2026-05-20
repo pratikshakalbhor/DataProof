@@ -183,17 +183,6 @@ export default function Topbar({ pageTitle, walletAddress, onDisconnect, onMenuC
           )}
         </div>
 
-        {/* User Chip */}
-        <div style={{ 
-          width: 34, height: 34, borderRadius: '50%', 
-          background: 'linear-gradient(135deg, #00d4ff, #0080ff)',
-          color: '#000', fontSize: 12, fontWeight: 800,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 0 10px rgba(0,212,255,0.3)'
-        }}>
-          {walletAddress ? walletAddress.slice(2, 4).toUpperCase() : 'BV'}
-        </div>
-
       </div>
     </header>
   );

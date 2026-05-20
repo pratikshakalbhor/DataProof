@@ -118,6 +118,11 @@ export const getStats = async (walletAddress) => {
 // ─────────────────────────────────────────
 // 7. EXTRAS
 // ─────────────────────────────────────────
+export const downloadOriginalFile = async (fileId, filename) => {
+  const res = await axios.get(`${BASE_URL}/api/files/${fileId}/download`, { responseType: 'blob' });
+  downloadBlob(res.data, filename);
+};
+
 export const downloadCertificate = async (fileId) => {
   const res = await axios.get(`${BASE_URL}/api/files/${fileId}/certificate`, { responseType: 'blob' });
   downloadBlob(res.data, `Certificate_${fileId}.pdf`);

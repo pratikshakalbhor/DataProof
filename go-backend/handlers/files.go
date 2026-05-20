@@ -17,6 +17,7 @@ import (
 
 	"cryptovault/database"
 	"cryptovault/models"
+	"cryptovault/utils"
 )
 
 func GetAllFiles(c *gin.Context) {
@@ -473,64 +474,83 @@ func DownloadOriginal(c *gin.Context) {
     if filename == "" {
         filename = fileId + ".bin"
     }
-    ext := filepath.Ext(filename)
 
-    // ✅ Search multiple paths
-    paths := []string{
-        record.BackupPath,
-        record.VaultPath,
-        filepath.Join("backup", fileId+ext),
-        filepath.Join("backup", fileId+"_original"+ext),
-        filepath.Join("uploads", fileId+"_"+filename),
-        filepath.Join("uploads", fileId+ext),
-    }
-
-    for _, p := range paths {
-        if p == "" {
-            continue
-        }
-        fmt.Printf("[Download] checking: %s\n", p)
-        if _, err := os.Stat(p); err == nil {
-            fmt.Printf("[Download] ✅ found: %s\n", p)
-            c.Header("Content-Disposition",
-                fmt.Sprintf(`attachment; filename="%s"`, filename))
+    // 1. Try serving unencrypted file from Vault path
+    if record.VaultPath != "" {
+        if _, err := os.Stat(record.VaultPath); err == nil {
+            fmt.Printf("[Download] ✅ serving unencrypted original from vault: %s\n", record.VaultPath)
+            c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
             c.Header("Content-Type", "application/octet-stream")
             c.Header("Access-Control-Allow-Origin", "*")
-            c.File(p)
+            c.File(record.VaultPath)
             return
         }
     }
 
-    // ✅ IPFS fallback
+    // 2. Try decrypting backup file from backup directory
+    backupDir := os.Getenv("BACKUP_DIR")
+    if backupDir == "" {
+        backupDir = "backup"
+    }
+    pathsToCheck := []string{
+        record.BackupPath,
+        filepath.Join(backupDir, fileId),
+        filepath.Join(backupDir, fileId+filepath.Ext(filename)),
+    }
+
+    for _, p := range pathsToCheck {
+        if p == "" {
+            continue
+        }
+        if _, err := os.Stat(p); err == nil {
+            fmt.Printf("[Download] ✅ decrypting local backup: %s\n", p)
+            rawBytes, err := os.ReadFile(p)
+            if err == nil {
+                decrypted, err := utils.DecryptAES(rawBytes)
+                if err == nil {
+                    c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+                    c.Header("Content-Type", "application/octet-stream")
+                    c.Header("Access-Control-Allow-Origin", "*")
+                    c.Data(http.StatusOK, "application/octet-stream", decrypted)
+                    return
+                }
+            }
+        }
+    }
+
+    // 3. IPFS fallback + decryption
     if record.IpfsCID != "" {
         cid := strings.TrimSpace(record.IpfsCID)
-        cid = strings.TrimPrefix(cid,
-            "https://gateway.pinata.cloud/ipfs/")
+        cid = strings.TrimPrefix(cid, "https://gateway.pinata.cloud/ipfs/")
         cid = strings.TrimPrefix(cid, "https://ipfs.io/ipfs/")
         cid = strings.TrimPrefix(cid, "/ipfs/")
         cid = strings.TrimPrefix(cid, "ipfs/")
 
         ipfsURL := "https://gateway.pinata.cloud/ipfs/" + cid
-        fmt.Printf("[Download] IPFS: %s\n", ipfsURL)
+        fmt.Printf("[Download] IPFS encrypted fetch: %s\n", ipfsURL)
 
         client := &http.Client{Timeout: 60 * time.Second}
         resp, err := client.Get(ipfsURL)
         if err == nil && resp.StatusCode == 200 {
             defer resp.Body.Close()
-            c.Header("Content-Disposition",
-                fmt.Sprintf(`attachment; filename="%s"`, filename))
-            c.Header("Content-Type", "application/octet-stream")
-            c.Header("Access-Control-Allow-Origin", "*")
-            io.Copy(c.Writer, resp.Body)
-            return
+            encryptedBytes, err := io.ReadAll(resp.Body)
+            if err == nil {
+                decrypted, err := utils.DecryptAES(encryptedBytes)
+                if err == nil {
+                    c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+                    c.Header("Content-Type", "application/octet-stream")
+                    c.Header("Access-Control-Allow-Origin", "*")
+                    c.Data(http.StatusOK, "application/octet-stream", decrypted)
+                    return
+                }
+            }
         }
     }
 
     fmt.Printf("[Download] ❌ not found: %s\n", fileId)
     c.JSON(http.StatusNotFound, gin.H{
-        "error":  "File not available",
+        "error":  "File not available or could not be decrypted",
         "fileId": fileId,
-        "paths":  paths,
     })
 }
 

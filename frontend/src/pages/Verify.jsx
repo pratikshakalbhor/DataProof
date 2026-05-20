@@ -486,27 +486,74 @@ export default function Verify({ walletAddress, onNotify }) {
                 <div className="card glass-card" style={{ padding: '24px' }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ width: 8, height: 2, background: 'var(--accent-red)' }}></span>
-                    Forensic Byte-Diff Analysis
+                    Line-by-Line Forensic Analysis — {result.diff.summary?.total || 0} Changes
                   </div>
                   <div style={{ 
-                    maxHeight: 200, overflowY: 'auto', background: '#05070a', 
-                    padding: '20px', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)',
-                    border: '1px solid rgba(255,255,255,0.05)', lineHeight: 1.6
+                    maxHeight: 300, overflowY: 'auto', background: '#05070a', 
+                    padding: '16px', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)',
+                    border: '1px solid rgba(255,255,255,0.05)', lineHeight: 1.8
                   }}>
-                    {result.diff.changes?.map((ch, i) => (
-                      <div key={i} style={{ 
-                        color: ch.type === 'added' ? 'var(--accent-teal)' : ch.type === 'removed' ? 'var(--accent-red)' : 'var(--text-muted)',
-                        background: ch.type === 'added' ? 'rgba(0, 255, 163, 0.05)' : ch.type === 'removed' ? 'rgba(255, 62, 62, 0.05)' : 'transparent',
-                        padding: '0 8px', borderRadius: 4, marginBottom: 2
-                      }}>
-                        <span style={{ opacity: 0.5, marginRight: 10, width: 10, display: 'inline-block' }}>{ch.type === 'added' ? '+' : ch.type === 'removed' ? '-' : ' '}</span>
-                        {ch.after || ch.before}
+                    <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 0, marginBottom: 10, fontSize: 10, color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>
+                      <div style={{ fontWeight: 800 }}>Line</div>
+                      <div style={{ fontWeight: 800 }}>Change</div>
+                    </div>
+                    {result.diff.changes && result.diff.changes.length > 0 ? (
+                      result.diff.changes.map((ch, i) => {
+                        const bgColor = ch.type === 'added' ? 'rgba(0, 255, 163, 0.08)' : 
+                                       ch.type === 'removed' ? 'rgba(255, 62, 62, 0.08)' : 
+                                       ch.type === 'modified' ? 'rgba(255, 193, 7, 0.08)' : 'transparent';
+                        const textColor = ch.type === 'added' ? 'var(--accent-teal)' : 
+                                         ch.type === 'removed' ? 'var(--accent-red)' : 
+                                         ch.type === 'modified' ? 'rgba(255, 193, 7, 1)' : 'var(--text-muted)';
+                        const icon = ch.type === 'added' ? '+' : ch.type === 'removed' ? '−' : '~';
+                        
+                        return (
+                          <div 
+                            key={i} 
+                            style={{ 
+                              display: 'grid', 
+                              gridTemplateColumns: '40px 1fr', 
+                              gap: 0,
+                              background: bgColor,
+                              padding: '4px 8px',
+                              borderRadius: 4,
+                              marginBottom: 2,
+                              borderLeft: `2px solid ${textColor}`,
+                              wordBreak: 'break-all'
+                            }}>
+                            <div style={{ color: textColor, fontWeight: 800, fontSize: 11, minWidth: 30 }}>{icon} {ch.index || i}</div>
+                            <div style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {ch.line?.slice(0, 120)}{ch.line?.length > 120 ? '...' : ''}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                        Binary mismatch detected. Line-level diff unavailable for this format.
                       </div>
-                    ))}
-                    {(!result.diff.changes || result.diff.changes.length === 0) && (
-                      <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>Binary mismatch detected. Exact diff unavailable for this format.</div>
                     )}
                   </div>
+                  {result.diff.summary && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 16 }}>
+                      <div style={{ padding: 12, background: 'rgba(0, 255, 163, 0.08)', borderRadius: 8, border: '1px solid rgba(0, 255, 163, 0.2)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>Added Lines</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent-teal)' }}>{result.diff.summary.added || 0}</div>
+                      </div>
+                      <div style={{ padding: 12, background: 'rgba(255, 62, 62, 0.08)', borderRadius: 8, border: '1px solid rgba(255, 62, 62, 0.2)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>Removed Lines</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent-red)' }}>{result.diff.summary.removed || 0}</div>
+                      </div>
+                      <div style={{ padding: 12, background: 'rgba(255, 193, 7, 0.08)', borderRadius: 8, border: '1px solid rgba(255, 193, 7, 0.2)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>Modified Lines</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255, 193, 7, 1)' }}>{result.diff.summary.modified || 0}</div>
+                      </div>
+                      <div style={{ padding: 12, background: 'rgba(255, 255, 255, 0.03)', borderRadius: 8, border: '1px solid rgba(255, 255, 255, 0.1)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>Total Changes</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>{result.diff.summary.total || 0}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

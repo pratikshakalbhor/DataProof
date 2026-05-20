@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getAllFiles } from '../utils/api';
+import { getAllFiles, downloadOriginalFile } from '../utils/api';
 import {
   Activity, AlertTriangle, CheckCircle, ExternalLink,
-  FileText, RefreshCw, Search, ShieldCheck, X, Archive
+  FileText, RefreshCw, Search, ShieldCheck, X, DownloadCloud
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -87,16 +87,13 @@ export default function MyFiles({ walletAddress }) {
     fetchFiles(); 
   }, [fetchFiles]);
 
-  const handleArchiveFile = async (fileId) => {
-    if (!window.confirm("Move this asset to forensic archive?")) return;
+  const handleDownload = async (fileId, name) => {
     setProcessing(fileId);
     try {
-      const { archiveFile } = await import('../utils/api');
-      await archiveFile(fileId, walletAddress);
-      toast.success("Asset moved to forensic archive");
-      await fetchFiles();
+      await downloadOriginalFile(fileId, name);
+      toast.success(`Download started for ${name}`);
     } catch (err) {
-      toast.error(err.message || "Failed to archive asset");
+      toast.error(err.message || "Download failed");
     } finally {
       setProcessing(null);
     }
@@ -133,9 +130,6 @@ export default function MyFiles({ walletAddress }) {
             <p>Immutable cryptographic records of all registered assets</p>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="ref-btn" onClick={() => navigate('/archive')} style={{ background: 'rgba(148,163,184,0.08)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-              <Archive size={14} /> <span>Forensic Archive</span>
-            </button>
             <button className="ref-btn" onClick={fetchFiles}>
               <RefreshCw size={14} className={loading ? 'spin' : ''} /> <span>Sync Ledger</span>
             </button>
@@ -262,11 +256,11 @@ export default function MyFiles({ walletAddress }) {
 
                     {/* Action Buttons */}
                     <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                      <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                         {/* Verify Button */}
                         <button
                           className="btn btn-g"
-                          style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                          style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
                           onClick={e => { 
                             e.stopPropagation(); 
                             navigate(`/verify?id=${f.fileId}`); 
@@ -280,7 +274,7 @@ export default function MyFiles({ walletAddress }) {
                         {(f.status === 'tampered' || f.status === 'corrupted' || f.status === 'UNDER_INVESTIGATION') ? (
                           <button
                             className="btn btn-teal"
-                            style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                            style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
                             onClick={e => { e.stopPropagation(); handleRestore(fileId, name); }}
                             disabled={processing === fileId}
                             title="Restore integrity from forensic backup"
@@ -288,33 +282,18 @@ export default function MyFiles({ walletAddress }) {
                             <RefreshCw size={13} className={processing === fileId ? "spin" : ""} /> Restore
                           </button>
                         ) : (
-                          <div style={{ width: 75 }} />
+                          <div style={{ width: 80 }} />
                         )}
 
-                        {/* Blockchain Proof Button */}
-                        {txHash ? (
-                          <a
-                            href={`https://sepolia.etherscan.io/tx/${txHash}`}
-                            target="_blank" rel="noreferrer"
-                            className="btn btn-purple"
-                            style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}
-                            onClick={e => e.stopPropagation()}
-                          >
-                            <ExternalLink size={13} /> Proof
-                          </a>
-                        ) : (
-                          <div style={{ width: 68 }} />
-                        )}
-
-                        {/* Archive Button */}
+                        {/* Download Button */}
                         <button
-                          className="btn btn-g"
-                          style={{ padding: '4px 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, color: '#64748b' }}
-                          onClick={e => { e.stopPropagation(); handleArchiveFile(fileId); }}
+                          className="btn btn-pu"
+                          style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
+                          onClick={e => { e.stopPropagation(); handleDownload(fileId, name); }}
                           disabled={processing === fileId}
-                          title="Move to Archive"
+                          title="Download original digital asset"
                         >
-                          {processing === fileId ? <RefreshCw size={13} className="spin" /> : <Archive size={13} />}
+                          <DownloadCloud size={13} /> Download
                         </button>
                       </div>
                     </td>
