@@ -405,7 +405,6 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
               </div>
             )}
 
-            {/* ERROR */}
             {!loading && error && (
               <div className="forensic-error">
                 <div className="forensic-error-icon"><AlertTriangle size={32} /></div>
@@ -477,37 +476,6 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
 
                     {/* Word-level diff viewer — only when both texts exist and differ */}
                     {!extracting && tamperedAvailable && hasBothTexts && (
-<<<<<<< HEAD
-                      <ReactDiffViewer
-                        oldValue={origText}
-                        newValue={modText}
-                        splitView={true}
-                        compareMethod={DiffMethod.WORDS}
-                        useDarkTheme={true}
-                        leftTitle="🔒 Original (Blockchain Sealed)"
-                        rightTitle="⚠️ Tampered Version"
-                        styles={{
-                          variables: {
-                            dark: {
-                              diffViewerBackground:    '#0d1117',
-                              diffViewerColor:         '#e2e8f0',
-                              addedBackground:         'rgba(20,184,166,0.15)',
-                              addedColor:              '#d1fae5',
-                              removedBackground:       'rgba(239,68,68,0.15)',
-                              removedColor:            '#fecaca',
-                              wordAddedBackground:     'rgba(20,184,166,0.5)',
-                              wordRemovedBackground:   'rgba(239,68,68,0.5)',
-                              addedGutterBackground:   'rgba(20,184,166,0.2)',
-                              removedGutterBackground: 'rgba(239,68,68,0.2)',
-                              gutterBackground:        '#0a0f1a',
-                              gutterColor:             '#475569',
-                            }
-                          },
-                          line:   { fontFamily: 'monospace', fontSize: '12px' },
-                          gutter: { minWidth: '40px' },
-                        }}
-                      />
-=======
                       <>
                         {/* Forensic Analysis Summary Banner */}
                         <div style={{
