@@ -494,6 +494,48 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
                           </p>
                         </div>
 
+                        {/* Show diff summary statistics if available */}
+                        {data.diffSummary && (
+                          <div style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 10, marginBottom: 14
+                          }}>
+                            <div style={{
+                              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fca5a5' }}>
+                                {data.diffSummary.removed}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#f87171', fontWeight: 700, marginTop: 2 }}>
+                                REMOVED LINES
+                              </div>
+                            </div>
+                            <div style={{
+                              background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#99f6e4' }}>
+                                {data.diffSummary.added}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#14b8a6', fontWeight: 700, marginTop: 2 }}>
+                                ADDED LINES
+                              </div>
+                            </div>
+                            <div style={{
+                              background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)',
+                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fcd34d' }}>
+                                {data.diffSummary.modified}
+                              </div>
+                              <div style={{ fontSize: 10, color: '#facc15', fontWeight: 700, marginTop: 2 }}>
+                                MODIFIED LINES
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Column headers */}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 4px 1fr', gap: 0, marginBottom: 6 }}>
                           <div style={{ padding: '8px 12px' }}>
