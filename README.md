@@ -1,13 +1,4 @@
-<div align="center">
 
-<img src="https://img.shields.io/badge/Blockchain-Ethereum%20Sepolia-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white"/>
-<img src="https://img.shields.io/badge/Frontend-React.js-61DAFB?style=for-the-badge&logo=react&logoColor=black"/>
-<img src="https://img.shields.io/badge/Backend-Go%20%7C%20Gin-00ADD8?style=for-the-badge&logo=go&logoColor=white"/>
-<img src="https://img.shields.io/badge/Database-MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white"/>
-<img src="https://img.shields.io/badge/Storage-IPFS%20%7C%20Pinata-E4405F?style=for-the-badge&logo=pinata&logoColor=white"/>
-<img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge"/>
-
-<br/><br/>
 
 # 🔐 DataProof — ChainLock
 
