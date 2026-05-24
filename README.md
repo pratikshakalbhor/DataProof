@@ -1,13 +1,4 @@
-<div align="center">
 
-<img src="https://img.shields.io/badge/Blockchain-Ethereum%20Sepolia-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white"/>
-<img src="https://img.shields.io/badge/Frontend-React.js-61DAFB?style=for-the-badge&logo=react&logoColor=black"/>
-<img src="https://img.shields.io/badge/Backend-Go%20%7C%20Gin-00ADD8?style=for-the-badge&logo=go&logoColor=white"/>
-<img src="https://img.shields.io/badge/Database-MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white"/>
-<img src="https://img.shields.io/badge/Storage-IPFS%20%7C%20Pinata-E4405F?style=for-the-badge&logo=pinata&logoColor=white"/>
-<img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge"/>
-
-<br/><br/>
 
 # 🔐 DataProof — ChainLock
 
@@ -286,26 +277,8 @@ go mod tidy
 mkdir backup vault
 ```
 
-### 4. Environment Variables
-
-**`frontend/.env`**
-```env
-REACT_APP_API_URL=http://localhost:5000/api
-REACT_APP_CONTRACT_ADDRESS=0x0E89b6130955fE7007915D89DC44F2f60291732f
-REACT_APP_NETWORK_ID=11155111
 ```
-
-**`go-backend/.env`**
-```env
-PORT=5000
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/cryptovault
-PINATA_API_KEY=your_pinata_api_key
-PINATA_SECRET_KEY=your_pinata_secret_key
-CGO_ENABLED=0
-GIN_MODE=debug
-```
-
-### 5. Run Application
+### 4. Run Application
 
 ```bash
 # Terminal 1 — Backend
@@ -320,7 +293,7 @@ npm start
 # ✅ App running on localhost:3000
 ```
 
-### 6. Connect MetaMask
+### 5. Connect MetaMask
 1. Install [MetaMask](https://metamask.io/download/)
 2. Switch to **Sepolia Testnet**
 3. Get free test ETH: [sepoliafaucet.com](https://sepoliafaucet.com)
