@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getAllFiles, downloadOriginalFile } from '../utils/api';
+import { motion, AnimatePresence } from 'framer-motion';
+import { getAllFiles, downloadOriginalFile, restoreFile } from '../utils/api';
 import {
-  Activity, AlertTriangle, CheckCircle, ExternalLink,
-  FileText, RefreshCw, Search, ShieldCheck, X, DownloadCloud
+  Activity, AlertTriangle, ExternalLink,
+  FileText, RefreshCw, Search, ShieldCheck, X, 
+  DownloadCloud, Clock, Fingerprint, ChevronRight,
+  Database, ShieldAlert, RotateCcw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import '../styles/MyFiles.css';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 const fmtSize = b =>
@@ -14,36 +18,37 @@ const fmtSize = b =>
     : (b / 1048576).toFixed(2) + ' MB';
 
 const fmtDate = dt =>
-  dt ? new Date(dt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  dt ? new Date(dt).toLocaleDateString('en-US', { 
+    month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' 
+  }) : '—';
 
 
-function StatusBadge({ status, isExpired }) {
+function StatusPill({ status, isExpired }) {
   const s = (status || '').toLowerCase();
   if (isExpired) return (
-    <span className="badge" style={{ background: 'rgba(252,165,165,0.1)', color: '#fca5a5', border: '1px solid rgba(252,165,165,0.3)', borderRadius: 20, padding: '4px 12px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      <AlertTriangle size={11} /> EXPIRED
+    <span className="status-pill expired">
+      <Clock size={11} /> EXPIRED
     </span>
   );
-  if (s === 'valid') return (
-    <span className="badge" style={{ background: 'rgba(0,200,150,0.1)', color: 'var(--accent-teal)', border: '1px solid rgba(0,200,150,0.3)', borderRadius: 20, padding: '4px 12px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      <CheckCircle size={11} /> VALID
+  if (s === 'valid' || s === 'secure') return (
+    <span className="status-pill valid">
+      <ShieldCheck size={11} /> VALID
     </span>
   );
   if (s === 'tampered') return (
-    <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--accent-red)', border: '1px solid rgba(255,68,68,0.3)', borderRadius: 20, padding: '4px 12px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      <AlertTriangle size={11} /> TAMPERED
+    <span className="status-pill tampered">
+      <ShieldAlert size={11} /> TAMPERED
     </span>
   );
   return (
-    <span className="badge" style={{ background: 'rgba(255,140,66,0.1)', color: 'var(--accent-orange)', border: '1px solid rgba(255,140,66,0.3)', borderRadius: 20, padding: '4px 12px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      <Activity size={11} /> NOT_SYNCED
+    <span className="status-pill pending">
+      <Activity size={11} /> IN_GLORY
     </span>
   );
 }
 
-
 // ── Component ────────────────────────────────────────────────────────
-export default function MyFiles({ walletAddress }) {
+export default function MyFiles({ walletAddress, refreshKey }) {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -58,26 +63,20 @@ export default function MyFiles({ walletAddress }) {
     setError('');
     
     try {
-      console.log("MyFiles: Requesting files for wallet:", walletAddress.toLowerCase());
       const res = await getAllFiles(walletAddress);
-      
-      // DEBUG: Log the full response
-      console.log("MyFiles: API Response:", res);
-
-      // Extract files array from response (handle both object/array cases)
       const data = res.files || (Array.isArray(res) ? res : []);
       
-      // Double check wallet matching client-side (Optional but requested)
+      // Filter logic: match wallet or allow orphans
       const currentWallet = walletAddress.toLowerCase();
       const userFiles = data.filter(file => {
         const owner = (file.walletAddress || file.owner || '').toLowerCase();
-        return owner === currentWallet || owner === ''; // Allow if no owner or matches
+        return owner === currentWallet || !owner;
       });
 
       setFiles(userFiles);
     } catch (err) {
       console.error("MyFiles: Fetch Error:", err);
-      setError(err.message || 'Failed to load files');
+      setError(err.message || 'Failed to sync with forensic vault');
     } finally {
       setLoading(false);
     }
@@ -85,13 +84,13 @@ export default function MyFiles({ walletAddress }) {
 
   useEffect(() => { 
     fetchFiles(); 
-  }, [fetchFiles]);
+  }, [fetchFiles, refreshKey]);
 
   const handleDownload = async (fileId, name) => {
     setProcessing(fileId);
     try {
       await downloadOriginalFile(fileId, name);
-      toast.success(`Download started for ${name}`);
+      toast.success(`Download started: ${name}`);
     } catch (err) {
       toast.error(err.message || "Download failed");
     } finally {
@@ -100,12 +99,11 @@ export default function MyFiles({ walletAddress }) {
   };
 
   const handleRestore = async (fileId, name) => {
-    if (!window.confirm("Restore this file from blockchain backup?")) return;
+    if (!window.confirm(`Restore "${name}" to its original blockchain-sealed state? This will overwrite the locally modified version.`)) return;
     setProcessing(fileId);
     try {
-      const { restoreFile } = await import('../utils/api');
       await restoreFile(fileId, walletAddress);
-      toast.success(`${name} has been restored in the vault.`);
+      toast.success(`${name} successfully restored!`);
       await fetchFiles();
     } catch (err) {
       toast.error(err.message || "Restoration failed");
@@ -114,202 +112,223 @@ export default function MyFiles({ walletAddress }) {
     }
   };
 
-  // ── Filter ──
-  const q = query.trim().toLowerCase();
-  const filtered = files.filter(f =>
-    (f.fileName || f.name || f.filename || '').toLowerCase().includes(q)
-  );
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return files;
+    return files.filter(f =>
+      (f.fileName || f.name || f.filename || '').toLowerCase().includes(q) ||
+      (f.fileId || f.id || '').toLowerCase().includes(q)
+    );
+  }, [files, query]);
 
   return (
-    <div className="page">
-      <div className="page-inner">
-        {/* Header */}
-        <header className="ph">
-          <div>
-            <h1>Forensic Ledger</h1>
-            <p>Immutable cryptographic records of all registered assets</p>
+    <div className="page-inner">
+      <div className="my-files-container">
+        
+        {/* ── Header ── */}
+        <header className="files-header">
+          <div className="files-title">
+            <h1>
+              <Database size={32} color="#14b8a6" /> 
+              Forensic Asset Ledger
+            </h1>
+            <p>Immutable cryptographic inventory of all secured digital evidence</p>
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button className="ref-btn" onClick={fetchFiles}>
-              <RefreshCw size={14} className={loading ? 'spin' : ''} /> <span>Sync Ledger</span>
+          
+          <div style={{ display: 'flex', gap: 14 }}>
+            <div className="search-wrapper">
+              <Search className="search-icon-pos" size={18} />
+              <input
+                className="search-input-premium"
+                placeholder="Search by name or asset hash..."
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+              />
+              {query && <X size={14} className="close" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', color: '#64748b' }} onClick={() => setQuery('')} />}
+            </div>
+            
+            <button className="ref-btn" onClick={fetchFiles} style={{ height: 44, padding: '0 20px', borderRadius: 14 }}>
+              <RefreshCw size={14} className={loading ? 'spin' : ''} /> 
+              <span>Synchronize Vault</span>
             </button>
           </div>
         </header>
 
-        {error && <div className="card" style={{ padding: '12px 16px', background: 'rgba(255,62,62,0.08)', color: 'var(--accent-red)', border: '1px solid rgba(255,62,62,0.2)', marginBottom: 16, fontSize: 13, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <AlertTriangle size={16} /> {error}
-        </div>}
+        {error && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+            className="error-box" style={{ marginBottom: 24 }}>
+            <AlertTriangle size={18} /> {error}
+            <button onClick={fetchFiles} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textDecoration: 'underline', fontSize: 11 }}>Retry Sync</button>
+          </motion.div>
+        )}
 
-        {/* ── Search Bar ── */}
-        <div className="search-bar" style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 14, padding: '12px 20px',
-          marginBottom: 16, transition: 'all 0.2s',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-        }}>
-          <Search size={18} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-          <input
-            placeholder="Search assets by filename or identifier..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            style={{
-              flex: 1, background: 'none', border: 'none', outline: 'none',
-              fontSize: 14, color: 'var(--text-primary)',
-              fontFamily: 'var(--font-main)',
-            }}
-          />
-          {query && (
-            <button
-              onClick={() => setQuery('')}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'inline-flex', padding: 4 }}
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
-
-      {/* Ledger Table */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {loading ? (
-          <div className="loading-center"><div className="spin-ring" />Loading files...</div>
-        ) : filtered.length === 0 ? (
-          /* ── Empty / No-results state ── */
-          <div style={{ textAlign: 'center', padding: '48px 24px' }}>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 60, height: 60, borderRadius: '50%',
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              marginBottom: 16,
-            }}>
-              <Search size={24} style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-              {q ? 'No records matching your search' : 'No uploaded files found'}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              {q
-                ? `We couldn't find any files matching "${query}". Try a different name.`
-                : 'Upload your first file to get started.'}
-            </div>
-          </div>
-        ) : (
-          <table>
+        {/* ── Ledger Card ── */}
+        <div className="glass-ledger">
+          <table className="ledger-table-premium">
             <thead>
               <tr>
-                <th>Filename</th>
-                <th>Date</th>
-                <th>Status</th>
-                <th>TX Hash</th>
-                <th style={{ textAlign: 'center' }}>Actions</th>
+                <th>Digital Asset Identity</th>
+                <th>Network Timestamp</th>
+                <th>Integrity Status</th>
+                <th>Blockchain Proof</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(f => {
-                const fileId = f.fileId || f.id;
-                const name = f.fileName || f.name || f.filename || 'Unknown';
-                const txHash = f.txHash || '';
-                const isExpired = f.isExpired || (f.expiryDate && new Date(f.expiryDate) < new Date());
+              {loading ? (
+                <tr>
+                  <td colSpan="5">
+                    <div className="empty-explorer">
+                      <RefreshCw size={40} className="spin" color="#14b8a6" style={{ marginBottom: 16, opacity: 0.5 }} />
+                      <p>Scanning distributed ledger for asset records...</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan="5">
+                    <div className="empty-explorer">
+                      <Database size={40} color="#334155" style={{ marginBottom: 16, opacity: 0.3 }} />
+                      <h3>No Assets Detected</h3>
+                      <p>{query ? `No records found matching "${query}"` : 'Your forensic vault is currently empty.'}</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <AnimatePresence>
+                  {filtered.map((f, i) => {
+                    const fileId = f.fileId || f.id;
+                    const name = f.fileName || f.name || f.filename || 'Unknown Metadata';
+                    const txHash = f.txHash || '';
+                    const isExpired = f.isExpired || (f.expiryDate && new Date(f.expiryDate) < new Date());
+                    const isTampered = f.status?.toLowerCase() === 'tampered';
 
-                return (
-                  <tr key={fileId} className="tr-click" onClick={() => navigate(`/files/${fileId}`)}>
-                    {/* Filename */}
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <FileText size={15} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-                        <div>
-                          <div className="fname">{name.length > 28 ? name.slice(0, 25) + '...' : name}</div>
-                          <div className="ftype" style={{ fontSize: 10 }}>
-                            {f.fileType || f.type || '—'} · {fmtSize(f.fileSize)}
-                            {f.ipfsCID && <span style={{ marginLeft: 8, opacity: 0.7, color: 'var(--accent-purple)' }}>CID: {f.ipfsCID.slice(0, 8)}...</span>}
+                    return (
+                      <motion.tr 
+                        key={fileId}
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: i * 0.03 }}
+                        className="file-row"
+                        onClick={() => navigate(`/files/${fileId}`)}
+                      >
+                        {/* Filename & Info */}
+                        <td style={{ width: '30%' }}>
+                          <div className="asset-item">
+                            <div className="asset-icon-box" style={{ color: isTampered ? '#ef4444' : '#14b8a6' }}>
+                              {isTampered ? <ShieldAlert size={20} /> : <FileText size={20} />}
+                            </div>
+                            <div className="asset-info">
+                              <div className="name">{name}</div>
+                              <div className="meta">
+                                <span>{f.fileType?.toUpperCase() || f.type?.toUpperCase() || 'DATA'}</span>
+                                <span style={{ opacity: 0.3 }}>|</span>
+                                <span>{fmtSize(f.fileSize)}</span>
+                                {f.ipfsCID && (
+                                  <>
+                                    <span style={{ opacity: 0.3 }}>|</span>
+                                    <span style={{ color: '#818cf8', fontWeight: 600 }}>IPFS: {f.ipfsCID.slice(0, 8)}...</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    </td>
+                        </td>
 
-                    {/* Date */}
-                    <td style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                      {fmtDate(f.uploadedAt)}
-                    </td>
+                        {/* Date */}
+                        <td style={{ width: '15%', color: '#94a3b8', fontSize: 12 }}>
+                          {fmtDate(f.uploadedAt)}
+                        </td>
 
-                    {/* Status Badge */}
-                    <td><StatusBadge status={f.status} isExpired={isExpired} /></td>
+                        {/* Status */}
+                        <td style={{ width: '15%' }}>
+                          <StatusPill status={f.status} isExpired={isExpired} />
+                        </td>
 
-                    {/* TX Hash — clickable Etherscan link */}
-                    <td>
-                      {txHash && txHash.length === 66 ? ( 
-                        <a
-                          href={`https://sepolia.etherscan.io/tx/${txHash}`}
-                          target="_blank" rel="noreferrer"
-                          onClick={e => e.stopPropagation()}
-                          style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--accent-purple)', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                        >
-                          {txHash.slice(0, 8)}...{txHash.slice(-6)}
-                          <ExternalLink size={10} />
-                        </a>
-                      ) : (
-                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{txHash ? 'Invalid/Pending' : '—'}</span>
-                      )}
-                    </td>
+                        {/* Blockchain Proof */}
+                        <td style={{ width: '20%' }}>
+                          {txHash && txHash.startsWith('0x') ? (
+                            <a
+                              href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                              target="_blank" rel="noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              style={{ 
+                                display: 'flex', alignItems: 'center', gap: 6,
+                                color: '#38bdf8', fontSize: 11, fontFamily: 'monospace',
+                                textDecoration: 'none'
+                              }}
+                            >
+                              <Fingerprint size={12} />
+                              {txHash.slice(0, 10)}...{txHash.slice(-6)}
+                              <ExternalLink size={10} style={{ opacity: 0.5 }} />
+                            </a>
+                          ) : (
+                            <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
+                              Registry Pending...
+                            </span>
+                          )}
+                        </td>
 
-                    {/* Action Buttons */}
-                    <td>
-                      <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                        {/* Verify Button */}
-                        <button
-                          className="btn btn-g"
-                          style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
-                          onClick={e => { 
-                            e.stopPropagation(); 
-                            navigate(`/verify?id=${f.fileId}`); 
-                          }}
-                          title="Verify this file"
-                        >
-                          <ShieldCheck size={13} /> Verify
-                        </button>
+                        {/* Actions */}
+                        <td style={{ width: '20%', textAlign: 'right' }}>
+                          <div className="action-btn-group" onClick={e => e.stopPropagation()}>
+                            <button 
+                              className="action-btn verify" 
+                              title="Verify Integrity"
+                              onClick={() => navigate(`/verify?id=${fileId}`)}
+                            >
+                              <ShieldCheck size={16} />
+                            </button>
+                            
+                            {isTampered && (
+                              <button 
+                                className="action-btn restore" 
+                                title="Restore from Backup"
+                                onClick={() => handleRestore(fileId, name)}
+                                disabled={processing === fileId}
+                              >
+                                <RotateCcw size={16} className={processing === fileId ? "spin" : ""} />
+                              </button>
+                            )}
 
-                        {/* Restore Button (Forensic Logic) */}
-                        {(f.status === 'tampered' || f.status === 'corrupted' || f.status === 'UNDER_INVESTIGATION') ? (
-                          <button
-                            className="btn btn-teal"
-                            style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
-                            onClick={e => { e.stopPropagation(); handleRestore(fileId, name); }}
-                            disabled={processing === fileId}
-                            title="Restore integrity from forensic backup"
-                          >
-                            <RefreshCw size={13} className={processing === fileId ? "spin" : ""} /> Restore
-                          </button>
-                        ) : (
-                          <div style={{ width: 80 }} />
-                        )}
-
-                        {/* Download Button */}
-                        <button
-                          className="btn btn-pu"
-                          style={{ padding: '6px 12px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: '6px' }}
-                          onClick={e => { e.stopPropagation(); handleDownload(fileId, name); }}
-                          disabled={processing === fileId}
-                          title="Download original digital asset"
-                        >
-                          <DownloadCloud size={13} /> Download
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                            <button 
+                              className="action-btn download" 
+                              title="Download Asset"
+                              onClick={() => handleDownload(fileId, name)}
+                              disabled={processing === fileId}
+                            >
+                              <DownloadCloud size={16} />
+                            </button>
+                            
+                            <button 
+                              className="action-btn" 
+                              title="View Details"
+                              onClick={() => navigate(`/files/${fileId}`)}
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </motion.tr>
+                    );
+                  })}
+                </AnimatePresence>
+              )}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
 
-      {filtered.length > 0 && (
-        <p style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, textAlign: 'right' }}>
-          Showing {filtered.length} of {files.length} file{files.length !== 1 ? 's' : ''}
-        </p>
-      )}
+        {/* Summary Footer */}
+        {!loading && filtered.length > 0 && (
+          <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 20 }}>
+             <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>
+               TOTAL ASSETS: {files.length}
+             </span>
+             <span style={{ fontSize: 11, color: '#14b8a6', fontWeight: 600 }}>
+               INTEGRITY VERIFIED: {files.filter(f => f.status === 'valid' || f.status === 'secure').length}
+             </span>
+          </div>
+        )}
       </div>
     </div>
   );

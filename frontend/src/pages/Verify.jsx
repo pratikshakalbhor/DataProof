@@ -3,10 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, ShieldCheck, ShieldAlert, AlertTriangle, 
   Check, X, FlaskConical, Lock, 
-  RefreshCw, FileText
+  RefreshCw, FileText, Microscope, Activity, ArrowRight
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { pageVariants, cardVariants } from '../utils/animations';
 import { verifyFileOnChain } from '../utils/blockchain';
+import ForensicModal from '../components/ForensicModal';
 import '../styles/Verify.css';
 
 const API = (process.env.REACT_APP_API_URL || 'http://localhost:5000').replace(/\/api$/, '') + '/api';
@@ -29,6 +31,8 @@ export default function Verify({ walletAddress, onNotify }) {
   const [vaultFiles,    setVaultFiles]    = useState([]);
   const [showVaultPick, setShowVaultPick] = useState(false);
   const [vaultFile,     setVaultFile]     = useState(null);
+  const navigate = useNavigate();
+  const [showForensic, setShowForensic] = useState(false);
 
   const [suspiciousFile, setSuspiciousFile] = useState(null);
   const fileRef = useRef();
@@ -37,7 +41,6 @@ export default function Verify({ walletAddress, onNotify }) {
   const [auditStep,  setAuditStep]  = useState(0);
   const [result,     setResult]     = useState(null);
   const [error,      setError]      = useState('');
-  const [restoring,  setRestoring]  = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewMime, setPreviewMime] = useState('');
 
@@ -90,53 +93,7 @@ export default function Verify({ walletAddress, onNotify }) {
     }
   };
 
-  const handleRestore = async () => {
-    if (!result?.fileId) return;
-    setRestoring(true);
 
-    const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-
-    try {
-      // Step 1: Execute restore which now returns the original file directly
-      const res = await fetch(`${API}/restore/${result.fileId}`, { method: 'POST' });
-
-      if (res.ok) {
-        const blob = await res.blob();
-        const url  = window.URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = result.filename || result.fileName || vaultFile?.filename || 'restored_file';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-
-        if (typeof onNotify === 'function') onNotify('✅ File restored successfully!', 'success');
-        return;
-      }
-
-      // Step 3: IPFS fallback
-      if (result.ipfsCID) {
-        let cid = result.ipfsCID
-          .replace('https://gateway.pinata.cloud/ipfs/', '')
-          .replace('https://ipfs.io/ipfs/', '')
-          .replace('/ipfs/', '')
-          .replace('ipfs/', '');
-
-        window.open(`https://gateway.pinata.cloud/ipfs/${cid}`, '_blank');
-        if (typeof onNotify === 'function') onNotify('⬇️ Opening original from IPFS...', 'info');
-        return;
-      }
-
-      if (typeof onNotify === 'function') onNotify('Original file not available for restore', 'error');
-
-    } catch (err) {
-      console.error('Restore error:', err);
-      if (typeof onNotify === 'function') onNotify('❌ Restore failed: ' + err.message, 'error');
-    } finally {
-      setRestoring(false);
-    }
-  };
 
   const reset = () => {
     setVaultFile(null); setSuspiciousFile(null);
@@ -408,16 +365,35 @@ export default function Verify({ walletAddress, onNotify }) {
                 }} />
 
                 <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-                  {isValid ? <ShieldCheck size={56} color="var(--accent-teal)" /> : <ShieldAlert size={56} color="var(--accent-red)" />}
+                  {isValid ? (
+                    <motion.div initial={{ scale: 0.5, rotate: -45 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', damping: 10 }}>
+                      <ShieldCheck size={72} color="var(--accent-teal)" />
+                    </motion.div>
+                  ) : (
+                    <motion.div animate={{ scale: [1, 1.1, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
+                      <ShieldAlert size={72} color="var(--accent-red)" />
+                    </motion.div>
+                  )}
                 </div>
-                <h2 style={{ fontSize: 26, fontWeight: 800, margin: '0 0 10px', color: isValid ? 'var(--accent-teal)' : 'var(--accent-red)', letterSpacing: '-0.02em' }}>
-                  {isValid ? 'INTEGRITY VERIFIED' : 'TAMPER DETECTED'}
+                
+                <h2 style={{ fontSize: 28, fontWeight: 800, margin: '0 0 12px', color: isValid ? 'var(--accent-teal)' : 'var(--accent-red)', letterSpacing: '-0.03em' }}>
+                  {isValid ? 'VERIFIED' : 'TAMPER DETECTED'}
                 </h2>
-                <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: '400px', margin: '0 auto' }}>
-                  {isValid 
-                    ? 'Cryptographic fingerprints match perfectly. Asset is authentic.' 
-                    : 'A mismatch has been detected in the cryptographic fingerprints.'}
-                </p>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                  {isValid ? (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                         Blockchain Sealed — Integrity OK
+                      </div>
+                      <div style={{ height: 1, width: 40, background: 'var(--accent-teal)', opacity: 0.3, margin: '10px 0' }}></div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent-red)', textTransform: 'uppercase', letterSpacing: '0.15em', background: 'rgba(255, 62, 62, 0.1)', padding: '4px 12px', borderRadius: 4, border: '1px solid rgba(255, 62, 62, 0.2)' }}>
+                       Security Compromise Identified
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Analysis Grid */}
@@ -507,6 +483,8 @@ export default function Verify({ walletAddress, onNotify }) {
                                          ch.type === 'modified' ? 'rgba(255, 193, 7, 1)' : 'var(--text-muted)';
                         const icon = ch.type === 'added' ? '+' : ch.type === 'removed' ? '−' : '~';
                         
+                        const content = (ch.type === 'removed' ? ch.before : ch.after) || '';
+                        
                         return (
                           <div 
                             key={i} 
@@ -521,9 +499,9 @@ export default function Verify({ walletAddress, onNotify }) {
                               borderLeft: `2px solid ${textColor}`,
                               wordBreak: 'break-all'
                             }}>
-                            <div style={{ color: textColor, fontWeight: 800, fontSize: 11, minWidth: 30 }}>{icon} {ch.index || i}</div>
+                            <div style={{ color: textColor, fontWeight: 800, fontSize: 11, minWidth: 30 }}>{icon} {ch.line || i + 1}</div>
                             <div style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                              {ch.line?.slice(0, 120)}{ch.line?.length > 120 ? '...' : ''}
+                              {content.toString().slice(0, 120)}{content.toString().length > 120 ? '...' : ''}
                             </div>
                           </div>
                         );
@@ -563,17 +541,35 @@ export default function Verify({ walletAddress, onNotify }) {
                   whileHover={{ background: 'rgba(255,255,255,0.05)' }}
                   className="btn btn-s" onClick={reset} 
                   style={{ flex: 1, height: 50, borderRadius: 12, fontWeight: 700 }}>
-                  New Forensic Audit
+                  <RefreshCw size={14} style={{ marginRight: 8 }} /> New Forensic Audit
                 </motion.button>
+                
                 {!isValid ? (
-                  <motion.button 
-                    whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(255, 62, 62, 0.2)' }}
-                    whileTap={{ scale: 0.98 }}
-                    className="btn btn-p" onClick={handleRestore} disabled={restoring} 
-                    style={{ flex: 1.5, height: 50, borderRadius: 12, background: 'var(--accent-red)', color: '#fff', fontWeight: 800 }}>
-                    {restoring ? <RefreshCw size={16} className="spin" style={{ marginRight: 8 }} /> : <Shield size={16} style={{ marginRight: 8 }} />}
-                    {restoring ? 'EXECUTING RESTORATION...' : 'RESTORE VAULT ORIGINAL'}
-                  </motion.button>
+                  <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                      Required Security Actions:
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <motion.button 
+                        whileHover={{ scale: 1.02, background: 'rgba(20, 184, 166, 0.1)' }}
+                        onClick={() => setShowForensic(true)}
+                        style={{ padding: '12px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--accent-teal)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }}>
+                        <Microscope size={14} /> View Forensic Report
+                      </motion.button>
+                      <motion.button 
+                        whileHover={{ scale: 1.02, background: 'rgba(139, 110, 253, 0.1)' }}
+                        onClick={() => navigate('/recovery')}
+                        style={{ padding: '12px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--accent-purple)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }}>
+                        <Activity size={14} /> Open Recovery Hub
+                      </motion.button>
+                      <motion.button 
+                        whileHover={{ scale: 1.02, background: 'rgba(245, 158, 11, 0.1)' }}
+                        onClick={() => setShowForensic(true)}
+                        style={{ gridColumn: 'span 2', padding: '12px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--accent-orange)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }}>
+                        <ArrowRight size={14} /> Compare Original vs Modified
+                      </motion.button>
+                    </div>
+                  </div>
                 ) : (
                   <motion.button 
                     whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(0, 255, 163, 0.2)' }}
@@ -628,6 +624,15 @@ export default function Verify({ walletAddress, onNotify }) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Forensic Report Modal */}
+        {showForensic && result && (
+          <ForensicModal 
+            fileId={result.fileId} 
+            filename={result.fileName || result.filename || vaultFile?.filename}
+            onClose={() => setShowForensic(false)}
+          />
+        )}
 
       </div>
     </motion.div>

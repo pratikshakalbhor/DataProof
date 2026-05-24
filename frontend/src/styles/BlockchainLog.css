@@ -1,35 +1,238 @@
-.log-container h1 {
-  letter-spacing: -0.02em;
+/* BlockchainLog.css — Premium Forensic Aesthetic */
+
+:root {
+  --node-bg: #030712;
+  --panel-bg: rgba(17, 24, 39, 0.7);
+  --border-color: rgba(255, 255, 255, 0.06);
+  --accent-teal: #14b8a6;
+  --accent-blue: #3b82f6;
+  --accent-red: #ef4444;
+  --text-muted: #64748b;
+  --text-bright: #f8fafc;
+  --glass-bg: rgba(15, 23, 42, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.08);
 }
 
-.log-container table {
+.page-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Forensic Header */
+.forensic-header-section {
+  margin-bottom: 40px;
+  position: relative;
+}
+
+.forensic-title-main {
+  font-family: 'Outfit', sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  background: linear-gradient(to right, #f8fafc, #94a3b8);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.forensic-status-badge {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(20, 184, 166, 0.1);
+  color: #14b8a6;
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Node Status Bar */
+.node-status-bar {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 20px 28px;
+  margin-bottom: 32px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.node-status-bar::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(20, 184, 166, 0.3), transparent);
+}
+
+.block-chip {
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: 'Roboto Mono', monospace;
+  font-size: 11px;
+  color: #94a3b8;
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.block-chip.newest {
+  background: rgba(20, 184, 166, 0.1);
+  border-color: rgba(20, 184, 166, 0.3);
+  color: #14b8a6;
+  box-shadow: 0 0 15px rgba(20, 184, 166, 0.1);
+}
+
+/* Logic Ledger Table */
+.ledger-card {
+  background: #0b0f1a;
+  border: 1px solid var(--glass-border);
+  border-radius: 24px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  position: relative;
+}
+
+.ledger-card::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0; right: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle at top right, rgba(14, 165, 233, 0.03), transparent 40%);
+}
+
+.ledger-table {
+  width: 100%;
+  border-collapse: separate;
   border-spacing: 0;
 }
 
-.log-container tr:hover {
-  background: rgba(255, 255, 255, 0.02) !important;
-}
-
-.log-container th {
-  letter-spacing: 0.05em;
+.ledger-table th {
+  background: rgba(255, 255, 255, 0.02);
+  padding: 20px 24px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
   text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--glass-border);
 }
 
+.ledger-table td {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: all 0.2s ease;
+}
+
+.ledger-row {
+  cursor: default;
+}
+
+.ledger-row:hover td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.ledger-row.tamper-row {
+  background: rgba(239, 68, 68, 0.02);
+}
+
+.ledger-row.tamper-row:hover td {
+  background: rgba(239, 68, 68, 0.04);
+}
+
+/* Event Badge */
+.event-icon-box {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: transform 0.2s ease;
+}
+
+.event-icon-box::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.asset-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.asset-link:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Stats Cards */
+.forensic-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+  margin-top: 40px;
+}
+
+.stat-card-premium {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 24px;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.stat-card-premium:hover {
+  transform: translateY(-5px);
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(15, 23, 42, 0.8);
+}
+
+/* Animations */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
 .spin {
-  animation: spin 1s linear infinite;
+  animation: spin 1.5s linear infinite;
 }
 
-@keyframes pulse-teal {
-  0% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(20, 184, 166, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0); }
+@keyframes pulse-node {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.4; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
-.pulse-active {
-  animation: pulse-teal 2s infinite;
+.pulse-node {
+  animation: pulse-node 2s infinite ease-in-out;
 }
+
+
+/* No @font-face needed here as fonts are loaded in index.html */

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  CheckCircle, AlertTriangle, Clock, Lock, 
+  CheckCircle2 as CheckCircle, AlertTriangle, Clock, Lock, 
   Search, RefreshCw, Microscope, ChevronDown, 
   ExternalLink, Link
 } from 'lucide-react';
@@ -38,29 +38,40 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
   const [forensicFile, setForensicFile] = useState(null);
 
   /* ── Fetch files ── */
-  const fetchFiles = useCallback(async () => {
+  const fetchFiles = useCallback(async (isInitial = false, signal = null) => {
+    if (!walletAddress) {
+      setFiles([]);
+      setLoading(false);
+      return;
+    }
+
     try {
-      setLoading(true);
-      const res = await fetch(`${API}/files?wallet=${walletAddress}`);
+      if (isInitial || files.length === 0) setLoading(true);
+      
+      const res = await fetch(`${API}/files?wallet=${walletAddress}`, { signal });
       if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        console.error("Server returned non-JSON:", text.slice(0, 100));
-        throw new Error("Invalid response format from server");
-      }
-
       const data = await res.json();
-      setFiles(data.files || []);
+      const normalizedFiles = (data.files || []).map(f => ({
+        ...f,
+        status: f.status || 'pending'
+      }));
+      
+      setFiles(normalizedFiles);
     } catch (e) {
-      console.error("RecoveryHub Fetch Error:", e.message);
+      if (e.name !== 'AbortError') {
+        console.error("RecoveryHub Fetch Error:", e.message);
+      }
     } finally {
-      setLoading(false);
+      if (isInitial || files.length === 0) setLoading(false);
     }
-  }, [walletAddress]);
+  }, [walletAddress, files.length]);
 
-  useEffect(() => { fetchFiles(); }, [fetchFiles]);
+  useEffect(() => { 
+    const controller = new AbortController();
+    fetchFiles(true, controller.signal); 
+    return () => controller.abort();
+  }, [walletAddress, fetchFiles]);
 
   /* ── Download / Restore ── */
   const handleRestore = async (file) => {
@@ -79,7 +90,8 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
 
   /* ── Filtered list ── */
   const filtered = files.filter(f => {
-    const matchStatus = filter === 'all' || f.status === filter;
+    const fStatus = f.status || 'pending';
+    const matchStatus = filter === 'all' || fStatus === filter;
     const matchSearch = !search ||
       f.fileName?.toLowerCase().includes(search.toLowerCase()) ||
       f.filename?.toLowerCase().includes(search.toLowerCase()) ||
@@ -87,7 +99,7 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
     return matchStatus && matchSearch;
   });
 
-  const tamperedCount = files.filter(f => f.status === 'tampered').length;
+  const tamperedCount = files.filter(f => (f.status || 'pending') === 'tampered').length;
 
   /* ── Styles ── */
   const S = {
