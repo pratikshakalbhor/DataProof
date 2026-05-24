@@ -14,6 +14,7 @@ type FileRecord struct {
 	MimeType      string     `json:"mimeType"      bson:"mimeType"`
 	BackupPath    string     `json:"backupPath"    bson:"backupPath"`
 	VaultPath     string     `json:"vaultPath"     bson:"vaultPath"`
+	TamperedPath  string     `json:"tamperedPath"  bson:"tamperedPath"`
 	ExtractedText string     `json:"extractedText" bson:"extractedText"`
 	TamperedText  string     `json:"tamperedText"  bson:"tamperedText"`
 	WalletAddress string     `json:"walletAddress" bson:"walletAddress"`

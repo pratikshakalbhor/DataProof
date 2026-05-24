@@ -99,8 +99,8 @@ func UploadToPinata(fileData []byte, filename string) (string, string, error) {
 // FetchFromIPFS fetches decrypted file bytes for a given CID.
 // It fetches from the Pinata gateway, decrypts with AES, and returns raw bytes.
 func FetchFromIPFS(cid string) ([]byte, error) {
-	if cid == "" {
-		return nil, fmt.Errorf("IPFS: empty CID provided")
+	if cid == "" || strings.HasPrefix(cid, "local-only") {
+		return nil, fmt.Errorf("IPFS: skip fetch for local-only CID: %s", cid)
 	}
 
 	gateway := os.Getenv("PINATA_GATEWAY")
