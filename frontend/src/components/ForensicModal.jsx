@@ -1,163 +1,412 @@
 /**
- * ForensicModal.jsx — Enterprise Forensic Audit Platform
- * Forensic comparison modal with professional diff, restore workflow,
- * and clear ORIGINAL / TAMPERED labeling.
+ * ForensicModal.jsx — Word-level diff highlighting
+ * Handles docx word-level changes (not just line-level)
  */
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Shield, Microscope, CheckCircle2, AlertTriangle, RefreshCw,
-  FileText, X, Link, ExternalLink, Download, Clock,
+  Shield, Microscope, AlertTriangle, RefreshCw,
+  FileText, X, Link, ExternalLink,
   FileSearch, Activity, ShieldCheck, ShieldAlert, RotateCcw
 } from 'lucide-react';
-import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
-import mammoth from 'mammoth';
 import '../styles/ForensicModal.css';
 
-/**
- * Environment Variable Connection:
- * File: components/ForensicModal.jsx
- * Uses process.env.REACT_APP_API_URL to fetch forensic data.
- * Security Benefit: Avoids hardcoding server IPs, making the UI portable and easier to deploy.
- */
-const API = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API = (process.env.REACT_APP_API_URL || 'http://localhost:5000/api')
+  .replace(/\/api\/?$/, '') + '/api';
 
-/* ─── Risk Score Ring ─────────────────────────────────────── */
+// ── Risk Ring ─────────────────────────────────────────────────
 function RiskRing({ score, level }) {
   const r    = 36;
   const circ = 2 * Math.PI * r;
   const fill = circ - (score / 100) * circ;
   const colors = {
-    SECURE: '#14b8a6', LOW: '#f59e0b',
-    MEDIUM: '#f97316', HIGH: '#ef4444', CRITICAL: '#dc2626',
+    SECURE:'#14b8a6', LOW:'#f59e0b', MEDIUM:'#f97316',
+    HIGH:'#ef4444', CRITICAL:'#dc2626',
   };
   const color = colors[level] || colors.SECURE;
   return (
     <div className="risk-ring-wrap">
       <svg width={90} height={90} viewBox="0 0 90 90">
-        <circle cx={45} cy={45} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={7} />
-        <circle cx={45} cy={45} r={r} fill="none" stroke={color} strokeWidth={7}
-          strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={fill}
-          transform="rotate(-90 45 45)" style={{ transition: 'stroke-dashoffset 1s ease' }} />
+        <circle cx={45} cy={45} r={r} fill="none"
+          stroke="rgba(255,255,255,0.07)" strokeWidth={7}/>
+        <circle cx={45} cy={45} r={r} fill="none" stroke={color}
+          strokeWidth={7} strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={fill}
+          transform="rotate(-90 45 45)"
+          style={{transition:'stroke-dashoffset 1s ease'}}/>
         <text x={45} y={49} textAnchor="middle" dominantBaseline="middle"
-          fill={color} fontSize={16} fontWeight={800} fontFamily="monospace">{score}</text>
+          fill={color} fontSize={16} fontWeight={800}
+          fontFamily="monospace">{score}</text>
       </svg>
-      <span className="risk-ring-label" style={{ color }}>{level}</span>
+      <span className="risk-ring-label" style={{color}}>{level}</span>
     </div>
   );
 }
 
-/* ─── Text Preview Pane ───────────────────────────────────── */
-function TextPreviewPane({ content, label, side, fileName }) {
-  // Only show binary warning if there's genuinely no readable text
-  const isBinaryOrEncoded =
-    !content ||
-    content.startsWith('data:') ||
-    content.startsWith('UEsDB') || // DOCX zip magic in b64
-    content.length > 200000;
+// ── Word-level diff algorithm ─────────────────────────────────
+function computeWordDiff(oldStr, newStr) {
+  const oldWords = oldStr.split(/(\s+)/);
+  const newWords = newStr.split(/(\s+)/);
 
-  const isTampered = side === 'tampered';
+  // LCS-based word diff
+  const m = oldWords.length;
+  const n = newWords.length;
+
+  // Build LCS table
+  const dp = Array.from({length: m + 1}, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldWords[i-1] === newWords[j-1]) {
+        dp[i][j] = dp[i-1][j-1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+      }
+    }
+  }
+
+  // Backtrack to get diff
+  const result = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldWords[i-1] === newWords[j-1]) {
+      result.unshift({type: 'same', word: oldWords[i-1]});
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+      result.unshift({type: 'added', word: newWords[j-1]});
+      j--;
+    } else {
+      result.unshift({type: 'removed', word: oldWords[i-1]});
+      i--;
+    }
+  }
+  return result;
+}
+
+// ── Render text with word highlights ─────────────────────────
+function HighlightedText({ text, otherText, side }) {
+  if (!text || !otherText) {
+    return <span style={{color: '#94a3b8'}}>{text}</span>;
+  }
+
+  // We always want to compare orig vs tamp
+  // computeWordDiff(orig, tamp)
+  const wordDiff = computeWordDiff(
+    side === 'orig' ? text : otherText,
+    side === 'orig' ? otherText : text,
+  );
 
   return (
-    <div className={`forensic-preview-pane ${isTampered ? 'modified' : 'original'}`}>
-      {/* Label bar */}
-      <div className="forensic-preview-label">
-        <span className="forensic-preview-dot" />
-        <span className="forensic-preview-label-text">{label}</span>
-        {!isTampered && (
-          <span style={{
-            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            background: 'rgba(20,184,166,0.15)', color: '#14b8a6',
-            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
-          }}>
-            ✅ ORIGINAL SECURED FILE
-          </span>
-        )}
-        {isTampered && (
-          <span style={{
-            marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-            background: 'rgba(239,68,68,0.15)', color: '#ef4444',
-            padding: '2px 8px', borderRadius: 4, letterSpacing: '0.08em'
-          }}>
-            🔴 MODIFIED CONTENT DETECTED
-          </span>
-        )}
+    <>
+      {wordDiff.map((item, idx) => {
+        // Unchanged text looks the same on both sides
+        if (item.type === 'same') {
+          return <span key={idx} style={{color:'#cbd5e1'}}>{item.word}</span>;
+        }
+
+        // LEFT PANEL (Original): Highlight words that were removed/changed
+        if (side === 'orig' && item.type === 'removed') {
+          return (
+            <span key={idx} style={{
+              background: 'rgba(245, 158, 11, 0.2)', // Soft Amber
+              color: '#fcd34d', 
+              borderRadius: 3,
+              padding: '1px 3px',
+              fontWeight: 700,
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+            }}>
+              {item.word}
+            </span>
+          );
+        }
+
+        // RIGHT PANEL (Tampered): Highlight words that were added/modified
+        if (side === 'tamp' && item.type === 'added') {
+          return (
+            <span key={idx} style={{
+              background: 'rgba(20, 184, 166, 0.2)', // Soft Green
+              color: '#6ee7b7', 
+              borderRadius: 3,
+              padding: '1px 3px',
+              fontWeight: 700,
+              border: '1px solid rgba(20, 184, 166, 0.3)',
+            }}>
+              {item.word}
+            </span>
+          );
+        }
+
+        // Hide words that don't belong to the respective side
+        if (side === 'orig' && item.type === 'added') return null;
+        if (side === 'tamp' && item.type === 'removed') return null;
+
+        return <span key={idx} style={{color:'#cbd5e1'}}>{item.word}</span>;
+      })}
+    </>
+  );
+}
+
+// ── Line-by-line diff with word highlighting ─────────────────
+function LineDiffWithWordHighlight({ origText, tampText, changes, origName, tampName }) {
+  const [viewMode, setViewMode] = useState('side'); // side | lines | summary
+
+  const origLines = origText?.split('\n') || [];
+  const tampLines = tampText?.split('\n') || [];
+
+  const maxLen = Math.max(origLines.length, tampLines.length);
+
+  // Determine which lines differ
+  const diffLines = [];
+  for (let i = 0; i < maxLen; i++) {
+    const o = origLines[i] ?? '';
+    const t = tampLines[i] ?? '';
+    if (o !== t) {
+      const type = !o ? 'added' : !t ? 'removed' : 'modified';
+      diffLines.push({ lineNum: i+1, orig: o, tamp: t, type });
+    }
+  }
+
+  return (
+    <div>
+      {/* Summary banner */}
+      <div style={{
+        background:'rgba(234,179,8,.08)',
+        border:'1px solid rgba(234,179,8,.25)',
+        borderRadius:10, padding:'12px 16px', marginBottom:14,
+      }}>
+        <div style={{fontSize:11, fontWeight:800, color:'#facc15',
+          textTransform:'uppercase', letterSpacing:'.08em', marginBottom:6}}>
+          ⚠️ Forensic Analysis Summary
+        </div>
+        <p style={{color:'#cbd5e1', fontSize:12, lineHeight:1.7, margin:0}}>
+          Blockchain integrity check <strong style={{color:'#f87171'}}>failed</strong>.{' '}
+          <strong style={{color:'#f87171', background:'rgba(239,68,68,.2)',
+            padding:'1px 5px', borderRadius:3}}>Red strikethrough</strong> = removed words,{' '}
+          <strong style={{color:'#6ee7b7', background:'rgba(20,184,166,.2)',
+            padding:'1px 5px', borderRadius:3}}>Green highlight</strong> = added/changed words.
+        </p>
       </div>
 
-      {/* Panel heading */}
-      <div style={{ padding: '10px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        {!isTampered ? (
-          <>
-            <h3 style={{ color: '#14b8a6', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
-              ORIGINAL BLOCKCHAIN FILE
-            </h3>
-            {fileName && (
-              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
-                Original: {fileName}
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <h3 style={{ color: '#ef4444', fontWeight: 800, fontSize: 14, marginBottom: 2 }}>
-              TAMPERED MODIFIED FILE
-            </h3>
-            {fileName && (
-              <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginBottom: 8 }}>
-                Tampered: {fileName}
-              </div>
-            )}
-          </>
-        )}
+      {/* Stats */}
+      <div style={{display:'flex', gap:10, marginBottom:12, flexWrap:'wrap', alignItems:'center'}}>
+        <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20,
+          background:'rgba(239,68,68,.15)', color:'#f87171',
+          border:'1px solid rgba(239,68,68,.3)'}}>
+          {diffLines.length} line{diffLines.length!==1?'s':''} changed
+        </span>
+        <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20,
+          background:'rgba(20,184,166,.1)', color:'#14b8a6',
+          border:'1px solid rgba(20,184,166,.3)'}}>
+          {origLines.length} → {tampLines.length} lines total
+        </span>
+
+        {/* View toggle */}
+        <div style={{marginLeft:'auto', display:'flex', gap:4}}>
+          {[
+            {key:'side',    label:'Side by Side'},
+            {key:'lines',   label:`Changed Lines (${diffLines.length})`},
+          ].map(t => (
+            <button key={t.key} onClick={()=>setViewMode(t.key)} style={{
+              padding:'4px 12px', borderRadius:7, border:'none', cursor:'pointer',
+              background: viewMode===t.key ? 'rgba(255,255,255,.1)' : 'transparent',
+              color: viewMode===t.key ? '#e2e8f0' : '#64748b',
+              fontSize:11, fontWeight:600, fontFamily:'inherit',
+            }}>{t.label}</button>
+          ))}
+        </div>
       </div>
 
-      <div className="forensic-preview-content">
-        {isBinaryOrEncoded ? (
-          <div className="binary-evidence-card">
-            <Shield size={28} style={{ color: '#38bdf8', marginBottom: 12 }} />
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>
-              Binary Forensic Comparison Unavailable
+      {/* ── SIDE BY SIDE VIEW ── */}
+      {viewMode === 'side' && (
+        <div style={{
+          display:'grid', gridTemplateColumns:'1fr 1fr',
+          gap:0, border:'1px solid #1e293b', borderRadius:10, overflow:'hidden',
+        }}>
+          {/* Original header */}
+          <div style={{
+            padding:'8px 14px',
+            background:'rgba(20,184,166,.08)',
+            borderBottom:'1px solid rgba(20,184,166,.2)',
+            borderRight:'1px solid #1e293b',
+          }}>
+            <div style={{fontSize:10, fontWeight:800, color:'#14b8a6',
+              textTransform:'uppercase', letterSpacing:'.08em'}}>
+              ✅ Original (Blockchain Sealed)
             </div>
-            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.7 }}>
-              Text preview is not available for this file type.<br />
-              Use the <strong style={{ color: '#94a3b8' }}>Diff</strong> tab for extracted text comparison.
+            <div style={{fontSize:9, color:'#475569', fontFamily:'monospace', marginTop:2}}>
+              {origName}
             </div>
           </div>
-        ) : (
-          <pre>{content || '(empty)'}</pre>
-        )}
-      </div>
+
+          {/* Tampered header */}
+          <div style={{
+            padding:'8px 14px',
+            background:'rgba(239,68,68,.06)',
+            borderBottom:'1px solid rgba(239,68,68,.2)',
+          }}>
+            <div style={{fontSize:10, fontWeight:800, color:'#ef4444',
+              textTransform:'uppercase', letterSpacing:'.08em'}}>
+              🔴 Tampered (Modified)
+            </div>
+            <div style={{fontSize:9, color:'#475569', fontFamily:'monospace', marginTop:2}}>
+              {tampName}
+            </div>
+          </div>
+
+          {/* Line rows */}
+          {Array.from({length: maxLen}, (_, i) => {
+            const o = origLines[i] ?? '';
+            const t = tampLines[i] ?? '';
+            const changed = o !== t;
+            const rowBg = changed
+              ? 'rgba(234,179,8,.04)'
+              : 'transparent';
+
+            return (
+              <React.Fragment key={i}>
+                {/* Orig line */}
+                <div style={{
+                  padding:'3px 14px 3px 10px',
+                  borderBottom:'1px solid #0f1f2e',
+                  borderRight:'1px solid #1e293b',
+                  background: changed ? 'rgba(239,68,68,.05)' : rowBg,
+                  display:'flex', gap:8, alignItems:'flex-start',
+                  minHeight:24,
+                }}>
+                  <span style={{
+                    fontSize:9, color:'#334155', fontFamily:'monospace',
+                    minWidth:24, paddingTop:1, flexShrink:0, userSelect:'none',
+                  }}>{i+1}</span>
+                  <span style={{
+                    fontSize:12, fontFamily:'monospace', lineHeight:1.6,
+                    wordBreak:'break-word', flex:1,
+                  }}>
+                    {changed ? (
+                      <HighlightedText text={o} otherText={t} side="orig"/>
+                    ) : (
+                      <span style={{color:'#94a3b8'}}>{o}</span>
+                    )}
+                  </span>
+                </div>
+
+                {/* Tamp line */}
+                <div key={`t${i}`} style={{
+                  padding:'3px 14px 3px 10px',
+                  borderBottom:'1px solid #0f1f2e',
+                  background: changed ? 'rgba(20,184,166,.04)' : rowBg,
+                  display:'flex', gap:8, alignItems:'flex-start',
+                  minHeight:24,
+                }}>
+                  <span style={{
+                    fontSize:9, color:'#334155', fontFamily:'monospace',
+                    minWidth:24, paddingTop:1, flexShrink:0, userSelect:'none',
+                  }}>{i+1}</span>
+                  <span style={{
+                    fontSize:12, fontFamily:'monospace', lineHeight:1.6,
+                    wordBreak:'break-word', flex:1,
+                  }}>
+                    {changed ? (
+                      <HighlightedText text={t} otherText={o} side="tamp"/>
+                    ) : (
+                      <span style={{color:'#94a3b8'}}>{t}</span>
+                    )}
+                  </span>
+                </div>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── CHANGED LINES VIEW ── */}
+      {viewMode === 'lines' && (
+        <div style={{display:'flex', flexDirection:'column', gap:8, maxHeight:420, overflowY:'auto'}}>
+          {diffLines.length === 0 ? (
+            <div style={{textAlign:'center', padding:24, color:'#64748b', fontSize:12}}>
+              No line-level differences detected
+            </div>
+          ) : diffLines.map((dl, i) => (
+            <motion.div key={i}
+              initial={{opacity:0, x:-8}} animate={{opacity:1, x:0}}
+              transition={{delay:i*0.03}}
+              style={{
+                border:'1px solid rgba(234,179,8,.25)',
+                borderLeft:'4px solid #facc15',
+                borderRadius:8, overflow:'hidden',
+                background:'rgba(234,179,8,.04)',
+              }}>
+              {/* Line number */}
+              <div style={{
+                display:'flex', alignItems:'center', gap:8,
+                padding:'5px 12px',
+                borderBottom:'1px solid rgba(234,179,8,.15)',
+              }}>
+                <span style={{
+                  fontSize:9, fontWeight:800, padding:'1px 8px', borderRadius:20,
+                  background: dl.type === 'added' ? 'rgba(20,184,166,.15)'
+                    : dl.type === 'removed' ? 'rgba(239,68,68,.15)'
+                    : 'rgba(234,179,8,.15)',
+                  color: dl.type === 'added' ? '#14b8a6'
+                    : dl.type === 'removed' ? '#ef4444'
+                    : '#facc15',
+                  border: `1px solid ${dl.type === 'added' ? 'rgba(20,184,166,.3)'
+                    : dl.type === 'removed' ? 'rgba(239,68,68,.3)'
+                    : 'rgba(234,179,8,.3)'}`,
+                  textTransform:'uppercase',
+                }}>{dl.type.toUpperCase()}</span>
+                <span style={{fontSize:10, color:'#64748b', fontFamily:'monospace'}}>
+                  Line {dl.lineNum}
+                </span>
+              </div>
+
+              {/* Original line with removed words struck */}
+              {dl.orig !== undefined && (
+                <div style={{
+                  display:'flex', gap:8, padding:'6px 12px',
+                  background:'rgba(239,68,68,.06)',
+                  borderBottom:'1px solid rgba(239,68,68,.1)',
+                }}>
+                  <span style={{
+                    color:'#ef4444', fontWeight:800, fontSize:14,
+                    fontFamily:'monospace', flexShrink:0,
+                  }}>−</span>
+                  <code style={{
+                    fontSize:12, fontFamily:'monospace', wordBreak:'break-all',
+                    lineHeight:1.6, flex:1,
+                  }}>
+                    <HighlightedText text={dl.orig} otherText={dl.tamp} side="orig"/>
+                  </code>
+                </div>
+              )}
+
+              {/* Tampered line with added words highlighted */}
+              {dl.tamp !== undefined && (
+                <div style={{
+                  display:'flex', gap:8, padding:'6px 12px',
+                  background:'rgba(20,184,166,.05)',
+                }}>
+                  <span style={{
+                    color:'#14b8a6', fontWeight:800, fontSize:14,
+                    fontFamily:'monospace', flexShrink:0,
+                  }}>+</span>
+                  <code style={{
+                    fontSize:12, fontFamily:'monospace', wordBreak:'break-all',
+                    lineHeight:1.6, flex:1,
+                  }}>
+                    <HighlightedText text={dl.tamp} otherText={dl.orig} side="tamp"/>
+                  </code>
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-/* ─── Restore Success Banner ──────────────────────────────── */
-function RestoreBanner({ fileName }) {
-  return (
-    <motion.div
-      className="restore-success-banner"
-      initial={{ opacity: 0, y: -12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-    >
-      <ShieldCheck size={20} style={{ color: '#14b8a6', flexShrink: 0 }} />
-      <div>
-        <div style={{ fontWeight: 800, fontSize: 13, color: '#14b8a6' }}>
-          Original blockchain backup restored successfully
-        </div>
-        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-          RESTORED_{fileName} — downloaded from blockchain vault
-        </div>
-      </div>
-      <span className="badge badge-restored" style={{ marginLeft: 'auto', flexShrink: 0 }}>
-        <ShieldCheck size={10} style={{ marginRight: 4 }} />
-        RESTORED FROM BLOCKCHAIN
-      </span>
-    </motion.div>
-  );
-}
 
-/* ─── Main Modal ──────────────────────────────────────────── */
+
+// ── Main Modal ────────────────────────────────────────────────
 export default function ForensicModal({ fileId, filename, onClose, onRestored }) {
   const [data,      setData]      = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -166,27 +415,33 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
   const [restoring, setRestoring] = useState(false);
   const [restored,  setRestored]  = useState(false);
 
-  const [origText, setOrigText] = useState('');
-  const [modText,  setModText]  = useState('');
-  const [extracting, setExtracting] = useState(false);
-
-  /* ── Fetch forensic comparison data ── */
   const fetchData = useCallback(async () => {
-    if (!fileId) { setError('No file ID provided'); setLoading(false); return; }
+    if (!fileId) { setError('No file ID'); setLoading(false); return; }
     setLoading(true); setError('');
     try {
-      const res = await fetch(`${API}/file/forensic-compare/${encodeURIComponent(fileId)}`);
+      const res = await fetch(
+        `${API}/file/forensic-compare/${encodeURIComponent(fileId)}`
+      );
       if (!res.ok) {
         let msg = `HTTP ${res.status}`;
-        try { const j = await res.json(); msg = j.error || j.message || msg; } catch (_) {}
+        try { const j = await res.json(); msg = j.error || msg; } catch(_) {}
         throw new Error(msg);
       }
       const json = await res.json();
+      console.log('[ForensicModal] API Response:', {
+        tamperedAvailable: json.tamperedAvailable,
+        origTextLen: json.originalText?.length,
+        tampTextLen: json.tamperedText?.length,
+        origHash: json.originalHash?.slice(0,16),
+        tampHash: json.modifiedHash?.slice(0,16),
+        isIdentical: json.isIdentical,
+        changesCount: json.changes?.length,
+        sameContent: json.originalText === json.tamperedText,
+      });
       setData(json);
-      // Binary files — go to preview tab; text files — diff tab
-      if (json.isBinary && !json.filename?.endsWith('.docx')) setTab('preview');
-    } catch (e) {
-      setError(e.message || 'Failed to load forensic data');
+      setTab(json.isBinary && !json.isTextComparable ? 'preview' : 'diff');
+    } catch(e) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
@@ -194,174 +449,91 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  /* ── mammoth text extraction ── */
-  useEffect(() => {
-    if (!data) return;
-    
-    const isDocx = data.mimeType?.includes('wordprocessingml') ||
-                   data.filename?.endsWith('.docx');
-    
-    if (isDocx && data.isBinary) {
-      // Use mammoth to extract text in browser
-      setExtracting(true);
-      
-      const extractText = async (base64DataURL) => {
-        if (!base64DataURL) return '';
-        // Handle case if data URL doesn't have a comma, or is raw base64
-        const parts = base64DataURL.split(',');
-        const base64 = parts.length > 1 ? parts[1] : parts[0];
-        const binary = atob(base64);
-        const bytes  = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        const result = await mammoth.extractRawText({
-          arrayBuffer: bytes.buffer
-        });
-        return result.value;
-      };
-      
-      Promise.all([
-        extractText(data.original),
-        extractText(data.modified),
-      ]).then(([orig, mod]) => {
-        setOrigText(orig);
-        setModText(mod);
-        setExtracting(false);
-      }).catch(err => {
-        console.error('mammoth error:', err);
-        setExtracting(false);
-      });
-    } else {
-      // Already plain text
-      setOrigText(data.original || '');
-      setModText(data.modified  || '');
-    }
-  }, [data]);
-
-  /* ── Restore: overwrite vault with backup, then download RESTORED_ file ── */
   const handleRestore = async () => {
     setRestoring(true);
     try {
-      const res = await fetch(`${API}/restore/${encodeURIComponent(fileId)}`, { method: 'POST' });
+      const res = await fetch(
+        `${API}/restore/${encodeURIComponent(fileId)}`,
+        { method: 'POST' }
+      );
       if (!res.ok) {
         let msg = `HTTP ${res.status}`;
-        try { const j = await res.json(); msg = j.error || msg; } catch (_) {}
+        try { const j = await res.json(); msg = j.error || msg; } catch(_){}
         throw new Error(msg);
       }
-
-      // Download the restored original — named RESTORED_<filename>
-      const originalName = data?.fileName || filename || 'file';
-      const downloadName = `RESTORED_${originalName}`;
-      
-      // Use the blob directly from the restoration response
       const blob = await res.blob();
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
-      a.download = downloadName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setRestored(true);
-      onRestored?.();
-      await fetchData();
-    } catch (e) {
+      a.download = `RESTORED_${data?.fileName || filename}`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      setRestored(true); onRestored?.(); await fetchData();
+    } catch(e) {
       setError('Restore failed: ' + e.message);
     } finally {
       setRestoring(false);
     }
   };
 
-  /* ── Download Evidence Report (JSON, no binary content) ── */
-  const handleDownloadEvidence = () => {
-    if (!data) return;
-    const report = {
-      generatedAt:   new Date().toISOString(),
-      platform:      'ChainSeal Forensic Vault',
-      fileId:        data.fileId,
-      fileName:      data.fileName,
-      walletAddress: data.walletAddress,
-      txHash:        data.txHash,
-      status:        data.status,
-      riskScore:     data.riskScore,
-      riskLevel:     data.riskLevel,
-      originalHash:  data.originalHash,
-      modifiedHash:  data.modifiedHash,
-      isIdentical:   data.isIdentical,
-      mimeType:      data.mimeType,
-      changes:       data.changes || [],
-      changeSummary: data.changeSummary,
-    };
-    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `forensic-report-${data.fileId}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
-  const isDocx = data?.mimeType?.includes('wordprocessingml') ||
-                 data?.filename?.endsWith('.docx') ||
-                 data?.fileName?.endsWith('.docx');
 
+  // Resolve clean text
+  const origText  = data?.originalText || data?.original || '';
+  const tampText  = data?.tamperedText  || data?.modified  || '';
+  const origClean = origText?.startsWith('data:') ? '' : origText;
+  const tampClean = tampText?.startsWith('data:') ? '' : tampText;
+
+  const changes          = data?.changes || data?.diff || [];
   const isCritical        = data?.riskLevel === 'CRITICAL' || data?.riskLevel === 'HIGH';
-  const isBinary          = data?.isBinary && !isDocx;
-  const tamperedAvailable = data?.tamperedAvailable !== false;
-  const canRestore        = (data?.status === 'tampered' || !data?.isIdentical) && !restored && tamperedAvailable;
-  const origName          = data?.fileName || filename || fileId;
-  const hasBothTexts      = origText && modText && origText !== modText;
-  // Tampered filename: use provided or generate a fallback
-  const tamperedName      = data?.tamperedFileName || (origName ? `${origName}_modified` : 'modified_file');
+  const canRestore        = (data?.status === 'tampered' || !data?.isIdentical)
+                            && !restored && data?.tamperedAvailable !== false;
+  const origName  = data?.fileName || filename || fileId;
+  const tampName  = `${origName} (modified)`;
 
   return (
     <AnimatePresence>
-      <motion.div
-        className="forensic-overlay"
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        onClick={e => e.target === e.currentTarget && onClose()}
-      >
+      <motion.div className="forensic-overlay"
+        initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+        onClick={e => e.target===e.currentTarget && onClose()}>
+
         <motion.div
-          className={`forensic-modal ${isCritical ? 'critical' : ''}`}
-          initial={{ opacity: 0, scale: 0.94, y: 30 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.96 }}
-          transition={{ duration: 0.25 }}
-        >
+          className={`forensic-modal ${isCritical?'critical':''}`}
+          initial={{opacity:0, scale:0.94, y:30}}
+          animate={{opacity:1, scale:1, y:0}}
+          exit={{opacity:0, scale:0.96}}
+          transition={{duration:0.25}}>
 
-          {/* ── Header ── */}
-          <div className={`forensic-header ${isCritical ? 'critical' : ''}`}>
-            {data && !loading && <RiskRing score={data.riskScore} level={data.riskLevel} />}
-
+          {/* Header */}
+          <div className={`forensic-header ${isCritical?'critical':''}`}>
+            {data && !loading && (
+              <RiskRing score={data.riskScore} level={data.riskLevel}/>
+            )}
             <div className="forensic-title-block">
               <div className="forensic-title">
-                <h2><Microscope size={20} style={{ verticalAlign: 'middle', marginRight: 8 }} />Forensic Audit Report</h2>
-
-                {/* Status badges */}
+                <h2>
+                  <Microscope size={18} style={{verticalAlign:'middle',marginRight:8}}/>
+                  Forensic Audit Report
+                </h2>
                 {isCritical && !loading && (
-                  <motion.span animate={{ opacity: [1, 0.5, 1] }}
-                    transition={{ duration: 1.2, repeat: Infinity }}
+                  <motion.span animate={{opacity:[1,.5,1]}}
+                    transition={{duration:1.2, repeat:Infinity}}
                     className="badge badge-critical">
-                    <ShieldAlert size={11} style={{ marginRight: 4 }} />TAMPER DETECTED
+                    <ShieldAlert size={11} style={{marginRight:4}}/>TAMPER DETECTED
                   </motion.span>
                 )}
                 {data?.isIdentical && !loading && (
                   <span className="badge badge-valid">
-                    <ShieldCheck size={11} style={{ marginRight: 4 }} />VERIFIED
+                    <ShieldCheck size={11} style={{marginRight:4}}/>VERIFIED
                   </span>
                 )}
                 {restored && (
                   <span className="badge badge-restored">
-                    <RotateCcw size={11} style={{ marginRight: 4 }} />RESTORED
+                    <RotateCcw size={11} style={{marginRight:4}}/>RESTORED
                   </span>
                 )}
-
-                {/* Risk Level pill */}
                 {data && !loading && (
-                  <span className={`badge badge-risk-${(data.riskLevel || 'SECURE').toLowerCase()}`}>
+                  <span className={`badge badge-risk-${(data.riskLevel||'SECURE').toLowerCase()}`}>
                     RISK: {data.riskLevel}
                   </span>
                 )}
@@ -369,317 +541,225 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
               <div className="forensic-subtitle">
                 {origName}
                 {data?.txHash && data.txHash !== 'pending' && (
-                  <> &middot; TX: {data.txHash.slice(0, 16)}...</>
+                  <> · TX: {data.txHash.slice(0,16)}...</>
                 )}
               </div>
             </div>
 
-            {/* Tabs */}
             <div className="forensic-tabs">
               {[
-                { key: 'diff',    label: <span><Activity size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />Diff</span>,    hidden: isBinary },
-                { key: 'preview', label: <span><FileSearch size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />Preview</span> },
-                { key: 'info',    label: <span><FileText size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />Info</span> },
-              ].filter(t => !t.hidden).map(({ key, label }) => (
-                <button key={key} className={`forensic-tab ${tab === key ? 'active' : ''}`}
-                  onClick={() => setTab(key)}>{label}</button>
+                {key:'diff',    label:<><Activity size={13} style={{verticalAlign:'middle',marginRight:4}}/>Diff</>},
+                {key:'preview', label:<><FileSearch size={13} style={{verticalAlign:'middle',marginRight:4}}/>Preview</>},
+                {key:'info',    label:<><FileText size={13} style={{verticalAlign:'middle',marginRight:4}}/>Info</>},
+              ].map(({key, label}) => (
+                <button key={key}
+                  className={`forensic-tab ${tab===key?'active':''}`}
+                  onClick={()=>setTab(key)}>
+                  {label}
+                </button>
               ))}
             </div>
 
-            <button onClick={onClose} className="forensic-close"><X size={20} /></button>
+            <button onClick={onClose} className="forensic-close">
+              <X size={20}/>
+            </button>
           </div>
 
-          {/* ── Restore Success Banner ── */}
+          {/* Restore success banner */}
           {restored && (
-            <RestoreBanner fileName={origName} />
+            <motion.div initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}}
+              style={{
+                padding:'12px 18px', background:'rgba(20,184,166,.08)',
+                border:'1px solid rgba(20,184,166,.3)',
+                display:'flex', alignItems:'center', gap:10, flexShrink:0,
+              }}>
+              <ShieldCheck size={18} color="#14b8a6"/>
+              <div>
+                <div style={{fontSize:13, fontWeight:800, color:'#14b8a6'}}>
+                  Original file restored
+                </div>
+                <div style={{fontSize:11, color:'#94a3b8', marginTop:2}}>
+                  RESTORED_{origName} downloaded to your computer
+                </div>
+              </div>
+            </motion.div>
           )}
 
-          {/* ── Body ── */}
+          {/* Body */}
           <div className="forensic-body">
 
-            {/* LOADING */}
             {loading && (
               <div className="forensic-loading">
-                <div className="forensic-spinner" />
+                <div className="forensic-spinner"/>
                 Generating forensic comparison...
               </div>
             )}
 
             {!loading && error && (
               <div className="forensic-error">
-                <div className="forensic-error-icon"><AlertTriangle size={32} /></div>
+                <div className="forensic-error-icon">
+                  <AlertTriangle size={32}/>
+                </div>
                 <div className="forensic-error-message">{error}</div>
                 <button className="forensic-retry-btn" onClick={fetchData}>
-                  <RefreshCw size={14} style={{ marginRight: 6 }} />Retry
+                  <RefreshCw size={14} style={{marginRight:6}}/>Retry
                 </button>
                 <div className="forensic-error-hint">
                   <strong>Possible causes:</strong>
                   <ul>
-                    <li>The file was not saved locally during upload</li>
-                    <li>The backend server is not running</li>
-                    <li>The fileId is invalid</li>
+                    <li>File not saved locally during upload</li>
+                    <li>Tampered file not saved to vault during Verify</li>
+                    <li>Backend server not running</li>
+                    <li>Route /api/file/forensic-compare/:fileId missing</li>
                   </ul>
                 </div>
               </div>
             )}
 
-            {/* CONTENT */}
             {!loading && !error && data && (
               <>
-                {/* ── DIFF TAB ── */}
+                {/* DIFF TAB */}
                 {tab === 'diff' && (
                   <div className="forensic-diff-wrap">
-                    {extracting && (
-                      <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
-                        ⏳ Extracting text from .docx for comparison...
-                      </div>
-                    )}
-
-                    {/* No tampered version uploaded yet */}
-                    {!extracting && !tamperedAvailable && (
-                      <div className="forensic-no-diff forensic-no-tampered">
+                    {!data.tamperedAvailable ? (
+                      <div style={{textAlign:'center', padding:40}}>
                         <div style={{
-                          width: 56, height: 56, borderRadius: '50%',
-                          background: 'rgba(245,158,11,0.12)', display: 'flex',
-                          alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
+                          width:56, height:56, borderRadius:'50%',
+                          background:'rgba(245,158,11,.12)',
+                          display:'flex', alignItems:'center', justifyContent:'center',
+                          margin:'0 auto 16px',
                         }}>
-                          <AlertTriangle size={28} style={{ color: '#f59e0b' }} />
+                          <AlertTriangle size={28} color="#f59e0b"/>
                         </div>
-                        <h3 style={{ color: '#f59e0b', fontSize: 15, fontWeight: 700, marginBottom: 8 }}>
+                        <h3 style={{color:'#f59e0b', fontSize:15, fontWeight:700, marginBottom:8}}>
                           No Tampered Version Available
                         </h3>
-                        <p style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.7, maxWidth: 420, margin: '0 auto' }}>
-                          {data.tamperedMessage || 'No tampered version has been detected yet.'}
-                          <br />
-                          To see a forensic diff, go to <strong style={{ color: '#e2e8f0' }}>Verify</strong> and
-                          upload a modified copy of this file. If tampering is detected, the diff will appear here.
+                        <p style={{color:'#94a3b8', fontSize:12, lineHeight:1.7,
+                          maxWidth:420, margin:'0 auto'}}>
+                          {data.tamperedMessage ||
+                            'Go to Verify page and upload a modified copy of this file.'}
                         </p>
                       </div>
-                    )}
-
-                    {/* Non-text file type */}
-                    {!extracting && tamperedAvailable && !data.isTextComparable && !isDocx && (
-                      <div style={{textAlign:'center', padding:40, color:'#64748b'}}>
-                        📄 Diff not available for {data.mimeType}
-                        <br />Use Preview tab instead.
-                      </div>
-                    )}
-
-                    {/* Files are identical */}
-                    {!extracting && tamperedAvailable && (data.isTextComparable || isDocx) && data.isIdentical && (
-                      <div className="forensic-no-diff forensic-identical">
-                        <div className="forensic-no-diff-icon"><CheckCircle2 size={32} /></div>
-                        <h3>Files Are Identical</h3>
-                        <p>The current file matches the original blockchain-sealed version. No tampering detected.</p>
-                      </div>
-                    )}
-
-                    {/* Word-level diff viewer — only when both texts exist and differ */}
-                    {!extracting && tamperedAvailable && hasBothTexts && (
-                      <>
-                        {/* Forensic Analysis Summary Banner */}
-                        <div style={{
-                          background: 'rgba(234,179,8,0.08)',
-                          border: '1px solid rgba(234,179,8,0.25)',
-                          borderRadius: 12,
-                          padding: '14px 18px',
-                          marginBottom: 14,
-                        }}>
-                          <h4 style={{ color: '#facc15', fontWeight: 800, fontSize: 12,
-                            textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
-                            ⚠️ FORENSIC ANALYSIS SUMMARY
-                          </h4>
-                          <p style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, margin: 0 }}>
-                            Blockchain integrity verification <strong style={{ color: '#f87171' }}>failed</strong> because
-                            the uploaded file content differs from the original secured blockchain backup.
-                            Modified words are highlighted in <strong style={{ color: '#f87171' }}>red</strong> (removed)
-                            and <strong style={{ color: '#6ee7b7' }}>green</strong> (added/changed).
-                          </p>
-                        </div>
-
-                        {/* Show diff summary statistics if available */}
-                        {data.diffSummary && (
-                          <div style={{
-                            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                            gap: 10, marginBottom: 14
-                          }}>
-                            <div style={{
-                              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
-                            }}>
-                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fca5a5' }}>
-                                {data.diffSummary.removed}
-                              </div>
-                              <div style={{ fontSize: 10, color: '#f87171', fontWeight: 700, marginTop: 2 }}>
-                                REMOVED LINES
-                              </div>
-                            </div>
-                            <div style={{
-                              background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.2)',
-                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
-                            }}>
-                              <div style={{ fontSize: 20, fontWeight: 800, color: '#99f6e4' }}>
-                                {data.diffSummary.added}
-                              </div>
-                              <div style={{ fontSize: 10, color: '#14b8a6', fontWeight: 700, marginTop: 2 }}>
-                                ADDED LINES
-                              </div>
-                            </div>
-                            <div style={{
-                              background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)',
-                              borderRadius: 8, padding: '10px 14px', textAlign: 'center'
-                            }}>
-                              <div style={{ fontSize: 20, fontWeight: 800, color: '#fcd34d' }}>
-                                {data.diffSummary.modified}
-                              </div>
-                              <div style={{ fontSize: 10, color: '#facc15', fontWeight: 700, marginTop: 2 }}>
-                                MODIFIED LINES
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Column headers */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 4px 1fr', gap: 0, marginBottom: 6 }}>
-                          <div style={{ padding: '8px 12px' }}>
-                            <span style={{
-                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
-                              letterSpacing: '0.08em', color: '#14b8a6',
-                              background: 'rgba(20,184,166,0.12)', padding: '3px 10px', borderRadius: 4
-                            }}>✅ ORIGINAL BLOCKCHAIN FILE</span>
-                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
-                              Original: {origName}
-                            </div>
-                          </div>
-                          {/* Visual separator */}
-                          <div style={{ background: 'rgba(239,68,68,0.2)' }} />
-                          <div style={{ padding: '8px 12px' }}>
-                            <span style={{
-                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
-                              letterSpacing: '0.08em', color: '#ef4444',
-                              background: 'rgba(239,68,68,0.12)', padding: '3px 10px', borderRadius: 4
-                            }}>🔴 TAMPERED MODIFIED FILE</span>
-                            <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', marginTop: 4 }}>
-                              Tampered: {tamperedName}
-                            </div>
-                          </div>
-                        </div>
-
-                        <ReactDiffViewer
-                          oldValue={origText}
-                          newValue={modText}
-                          splitView={true}
-                          compareMethod={DiffMethod.WORDS}
-                          useDarkTheme={true}
-                          leftTitle={`🔒 Original (Blockchain Sealed) — ${origName}`}
-                          rightTitle={`⚠️ Tampered Version — ${tamperedName}`}
-                          styles={{
-                            variables: {
-                              dark: {
-                                diffViewerBackground:    '#0d1117',
-                                diffViewerColor:         '#e2e8f0',
-                                addedBackground:         'rgba(20,184,166,0.15)',
-                                addedColor:              '#d1fae5',
-                                removedBackground:       'rgba(239,68,68,0.15)',
-                                removedColor:            '#fecaca',
-                                wordAddedBackground:     'rgba(20,184,166,0.5)',
-                                wordRemovedBackground:   'rgba(239,68,68,0.5)',
-                                addedGutterBackground:   'rgba(20,184,166,0.2)',
-                                removedGutterBackground: 'rgba(239,68,68,0.2)',
-                                gutterBackground:        '#0a0f1a',
-                                gutterColor:             '#475569',
-                              }
-                            },
-                            line:   { fontFamily: 'monospace', fontSize: '12px' },
-                            gutter: { minWidth: '40px' },
-                          }}
-                        />
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {/* ── PREVIEW TAB ── */}
-                {tab === 'preview' && (
-                  <div className="forensic-preview-wrap">
-                    <TextPreviewPane
-                      content={origText || data.original}
-                      label="ORIGINAL SECURED FILE"
-                      side="original"
-                      fileName={origName}
-                    />
-                    {/* Visual separator between panels */}
-                    <div style={{ width: 1, background: 'rgba(239,68,68,0.2)', margin: '0 4px', flexShrink: 0 }} />
-                    {tamperedAvailable ? (
-                      <TextPreviewPane
-                        content={modText || data.modified}
-                        label="TAMPERED FILE"
-                        side="tampered"
-                        fileName={tamperedName}
+                    ) : origClean && tampClean ? (
+                      <LineDiffWithWordHighlight
+                        origText={origClean}
+                        tampText={tampClean}
+                        changes={changes}
+                        origName={origName}
+                        tampName={tampName}
                       />
                     ) : (
-                      <div className={`forensic-preview-pane modified`}>
-                        <div className="forensic-preview-label">
-                          <span className="forensic-preview-dot" />
-                          <span className="forensic-preview-label-text">TAMPERED FILE</span>
-                          <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 800,
-                            color: '#f59e0b', letterSpacing: '0.08em' }}>
-                            NOT YET AVAILABLE
-                          </span>
-                        </div>
-                        <div className="forensic-preview-content" style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          minHeight: 200
-                        }}>
-                          <div style={{ textAlign: 'center', color: '#64748b' }}>
-                            <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: 8 }} />
-                            <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                              No tampered version detected yet.<br />
-                              Use <strong style={{ color: '#e2e8f0' }}>Verify</strong> with a modified file.
-                            </div>
-                          </div>
-                        </div>
+                      <div style={{textAlign:'center', padding:40, color:'#64748b', fontSize:12}}>
+                        📄 Text extraction unavailable. Use Preview tab.
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* ── INFO TAB ── */}
+                {/* PREVIEW TAB */}
+                {tab === 'preview' && (
+                  <div className="forensic-preview-wrap">
+                    <div className="forensic-preview-pane original">
+                      <div className="forensic-preview-label">
+                        <span className="forensic-preview-dot"/>
+                        <span className="forensic-preview-label-text">ORIGINAL SECURED FILE</span>
+                        <span style={{marginLeft:'auto', fontSize:9, fontWeight:800,
+                          background:'rgba(20,184,166,.15)', color:'#14b8a6',
+                          padding:'2px 8px', borderRadius:4}}>
+                          ✅ BLOCKCHAIN SEALED
+                        </span>
+                      </div>
+                      <div className="forensic-preview-content">
+                        {origClean
+                          ? <pre>{origClean}</pre>
+                          : <div className="binary-evidence-card">
+                              <Shield size={24} color="#38bdf8" style={{marginBottom:10}}/>
+                              <div style={{fontSize:12, color:'#94a3b8'}}>
+                                Text unavailable — use Diff tab
+                              </div>
+                            </div>
+                        }
+                      </div>
+                    </div>
+
+                    <div style={{width:1, background:'rgba(239,68,68,.2)',
+                      margin:'0 4px', flexShrink:0}}/>
+
+                    <div className="forensic-preview-pane modified">
+                      <div className="forensic-preview-label">
+                        <span className="forensic-preview-dot"/>
+                        <span className="forensic-preview-label-text">TAMPERED FILE</span>
+                        {!data.tamperedAvailable
+                          ? <span style={{marginLeft:'auto', fontSize:9, fontWeight:800,
+                              color:'#f59e0b'}}>NOT YET AVAILABLE</span>
+                          : <span style={{marginLeft:'auto', fontSize:9, fontWeight:800,
+                              background:'rgba(239,68,68,.15)', color:'#ef4444',
+                              padding:'2px 8px', borderRadius:4}}>
+                              🔴 MODIFIED
+                            </span>
+                        }
+                      </div>
+                      <div className="forensic-preview-content">
+                        {!data.tamperedAvailable
+                          ? <div style={{display:'flex', alignItems:'center',
+                              justifyContent:'center', minHeight:200,
+                              color:'#64748b', flexDirection:'column', gap:8}}>
+                              <AlertTriangle size={24} color="#f59e0b"/>
+                              <div style={{fontSize:12, textAlign:'center', lineHeight:1.6}}>
+                                No tampered version yet.<br/>
+                                Use <strong style={{color:'#e2e8f0'}}>Verify</strong> with modified file.
+                              </div>
+                            </div>
+                          : tampClean
+                            ? <pre>{tampClean}</pre>
+                            : <div className="binary-evidence-card">
+                                <Shield size={24} color="#ef4444" style={{marginBottom:10}}/>
+                                <div style={{fontSize:12, color:'#94a3b8'}}>
+                                  Text unavailable — use Diff tab
+                                </div>
+                              </div>
+                        }
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* INFO TAB */}
                 {tab === 'info' && (
                   <div className="forensic-info-wrap">
                     <div className="forensic-info-title">
-                      <FileText size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />
+                      <FileText size={16} style={{verticalAlign:'middle', marginRight:8}}/>
                       File Intelligence Report
                     </div>
-
                     {[
-                      { label: 'File ID',        val: data.fileId },
-                      { label: 'Filename',       val: data.fileName },
-                      { label: 'MIME Type',      val: data.mimeType },
-                      { label: 'File Size',      val: data.fileSize ? `${(data.fileSize / 1024).toFixed(1)} KB` : '--' },
-                      { label: 'Status',         val: data.status?.toUpperCase() },
-                      { label: 'Risk Score',     val: `${data.riskScore}/100 — ${data.riskLevel}` },
-                      { label: 'Integrity',      val: data.isIdentical
-                          ? <span style={{ color: '#14b8a6' }}><CheckCircle2 size={12} /> Identical — No tampering</span>
-                          : <span style={{ color: '#ef4444' }}><X size={12} /> Modified — Tampering detected</span> },
-                      { label: 'Original Hash',  val: data.originalHash },
-                      { label: 'Modified Hash',  val: data.modifiedHash },
-                      { label: 'TX Hash',        val: data.txHash },
-                      { label: 'Wallet',         val: data.walletAddress },
-                      { label: 'Uploaded',       val: data.uploadedAt ? new Date(data.uploadedAt).toLocaleString() : '--' },
-                    ].map(({ label, val }) => (
+                      {label:'File ID',       val: data.fileId},
+                      {label:'Filename',      val: data.fileName},
+                      {label:'MIME Type',     val: data.mimeType},
+                      {label:'File Size',     val: data.fileSize
+                        ? `${(data.fileSize/1024).toFixed(1)} KB` : '--'},
+                      {label:'Status',        val: data.status?.toUpperCase()},
+                      {label:'Risk Score',    val: `${data.riskScore}/100 — ${data.riskLevel}`},
+                      {label:'Integrity',     val: data.isIdentical
+                        ? '✅ Identical' : '❌ Tampered'},
+                      {label:'Original Hash', val: data.originalHash},
+                      {label:'Modified Hash', val: data.modifiedHash},
+                      {label:'TX Hash',       val: data.txHash},
+                      {label:'Wallet',        val: data.walletAddress},
+                      {label:'Uploaded',      val: data.uploadedAt
+                        ? new Date(data.uploadedAt).toLocaleString() : '--'},
+                    ].map(({label, val}) => (
                       <div key={label} className="forensic-info-row">
                         <span className="forensic-info-label">{label}</span>
-                        <span className="forensic-info-value">{val || '--'}</span>
+                        <span className="forensic-info-value">{val||'--'}</span>
                       </div>
                     ))}
-
-                    {data.txHash && data.txHash !== 'pending' && data.txHash.startsWith('0x') && (
+                    {data.txHash && data.txHash!=='pending' && data.txHash.startsWith('0x') && (
                       <a href={`https://sepolia.etherscan.io/tx/${data.txHash}`}
-                        target="_blank" rel="noreferrer" className="forensic-etherscan-link">
-                        <Link size={14} style={{ marginRight: 6 }} />
+                        target="_blank" rel="noreferrer"
+                        className="forensic-etherscan-link">
+                        <Link size={13} style={{marginRight:6}}/>
                         View Blockchain Proof on Etherscan
-                        <ExternalLink size={12} style={{ marginLeft: 4 }} />
+                        <ExternalLink size={11} style={{marginLeft:4}}/>
                       </a>
                     )}
                   </div>
@@ -688,43 +768,36 @@ export default function ForensicModal({ fileId, filename, onClose, onRestored })
             )}
           </div>
 
-          {/* ── Footer ── */}
+          {/* Footer */}
           {!loading && !error && data && (
             <div className="forensic-footer">
               <div className="forensic-footer-left">
-                <span className="forensic-footer-filename">{data.fileName || filename}</span>
-                <span className={`badge badge-${data.status || 'pending'}`}>
+                <span className="forensic-footer-filename">
+                  {data.fileName || filename}
+                </span>
+                <span className={`badge badge-${data.status||'pending'}`}>
                   {data.status?.toUpperCase()}
                 </span>
               </div>
-
               <div className="forensic-footer-actions">
-                {/* Download Evidence JSON */}
-                <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                  onClick={handleDownloadEvidence} className="btn-evidence">
-                  <Download size={15} style={{ marginRight: 7 }} />Download Evidence
-                </motion.button>
 
-                {/* Etherscan */}
-                {data.txHash && data.txHash !== 'pending' && data.txHash.startsWith('0x') && (
-                  <motion.a whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                {data.txHash && data.txHash!=='pending' && data.txHash.startsWith('0x') && (
+                  <motion.a whileHover={{scale:1.03}} whileTap={{scale:0.97}}
                     href={`https://sepolia.etherscan.io/tx/${data.txHash}`}
                     target="_blank" rel="noreferrer" className="btn-blockchain">
-                    <Link size={15} style={{ marginRight: 7 }} />Blockchain Proof
+                    <Link size={14} style={{marginRight:6}}/>Blockchain Proof
                   </motion.a>
                 )}
-
-                {/* Restore — only for tampered files, not after restore done */}
                 {canRestore && (
-                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                  <motion.button whileHover={{scale:1.03}} whileTap={{scale:0.97}}
                     disabled={restoring} onClick={handleRestore} className="btn-restore">
                     {restoring
-                      ? <Clock size={15} className="spin" style={{ marginRight: 7 }} />
-                      : <RotateCcw size={15} style={{ marginRight: 7 }} />}
-                    {restoring ? 'Restoring...' : 'Restore Original'}
+                      ? <><RefreshCw size={14} style={{marginRight:6,
+                          animation:'spin 1s linear infinite'}}/>Restoring...</>
+                      : <><RotateCcw size={14} style={{marginRight:6}}/>Restore Original</>
+                    }
                   </motion.button>
                 )}
-
                 <button onClick={onClose} className="btn-close-modal">Close</button>
               </div>
             </div>
