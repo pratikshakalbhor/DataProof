@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -475,46 +474,44 @@ func DownloadOriginal(c *gin.Context) {
         filename = fileId + ".bin"
     }
 
-    // 1. Try serving unencrypted file from Vault path
-    if record.VaultPath != "" {
-        if _, err := os.Stat(record.VaultPath); err == nil {
-            fmt.Printf("[Download] ✅ serving unencrypted original from vault: %s\n", record.VaultPath)
-            c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-            c.Header("Content-Type", "application/octet-stream")
-            c.Header("Access-Control-Allow-Origin", "*")
-            c.File(record.VaultPath)
-            return
+    // 1. Try local storage FIRST only in local environment
+    if utils.IsLocal() {
+        if record.VaultPath != "" {
+            if data, err := utils.ReadFileLocally(record.VaultPath); err == nil {
+                fmt.Printf("[Download] ✅ serving raw original from local vault: %s\n", record.VaultPath)
+                c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+                c.Data(http.StatusOK, "application/octet-stream", data)
+                return
+            }
         }
-    }
-
-    // 2. Try decrypting backup file from backup directory
-    backupDir := os.Getenv("BACKUP_DIR")
-    if backupDir == "" {
-        backupDir = "backup"
-    }
-    pathsToCheck := []string{
-        record.BackupPath,
-        filepath.Join(backupDir, fileId),
-        filepath.Join(backupDir, fileId+filepath.Ext(filename)),
-    }
-
-    for _, p := range pathsToCheck {
-        if p == "" {
-            continue
+        
+        // Try local backup
+        backupPaths := []string{
+            record.BackupPath,
+            filepath.Join("backup", fileId+"_original"+filepath.Ext(filename)),
         }
-        if _, err := os.Stat(p); err == nil {
-            fmt.Printf("[Download] ✅ decrypting local backup: %s\n", p)
-            rawBytes, err := os.ReadFile(p)
-            if err == nil {
-                decrypted, err := utils.DecryptAES(rawBytes)
+        for _, p := range backupPaths {
+            if p == "" { continue }
+            if data, err := utils.ReadFileLocally(p); err == nil {
+                decrypted, err := utils.DecryptAES(data)
                 if err == nil {
+                    fmt.Printf("[Download] ✅ serving decrypted original from local backup: %s\n", p)
                     c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-                    c.Header("Content-Type", "application/octet-stream")
-                    c.Header("Access-Control-Allow-Origin", "*")
                     c.Data(http.StatusOK, "application/octet-stream", decrypted)
                     return
                 }
             }
+        }
+    }
+
+    // 2. IPFS fallback (PRIMARY for production)
+    if record.IpfsCID != "" {
+        fmt.Printf("[Download] IPFS encrypted fetch: %s\n", record.IpfsCID)
+        data, err := utils.FetchFromIPFS(record.IpfsCID)
+        if err == nil {
+            c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+            c.Data(http.StatusOK, "application/octet-stream", data)
+            return
         }
     }
 

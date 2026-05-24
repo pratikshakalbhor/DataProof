@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -58,6 +59,33 @@ func GetAuditLogs(c *gin.Context) {
 	cursor.All(context.Background(), &logs)
 	if logs == nil {
 		logs = []models.AuditLog{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "logs": logs})
+}
+
+// GetTamperLogs — GET /api/tamper-logs
+func GetTamperLogs(c *gin.Context) {
+	wallet := c.Query("wallet")
+	col := database.GetCollection("tamper_logs")
+
+	filter := bson.M{}
+	if wallet != "" {
+		filter["walletAddress"] = strings.ToLower(wallet)
+	}
+
+	opts := options.Find().SetSort(bson.D{{Key: "detectedAt", Value: -1}})
+	cursor, err := col.Find(context.Background(), filter, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tamper logs"})
+		return
+	}
+	defer cursor.Close(context.Background())
+
+	var logs []bson.M
+	cursor.All(context.Background(), &logs)
+	if logs == nil {
+		logs = []bson.M{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "logs": logs})

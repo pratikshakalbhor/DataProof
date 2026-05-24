@@ -62,7 +62,7 @@ func UploadFile(c *gin.Context) {
 	}
 
 	collection := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second) // Increased timeout for potentially large file processing, IPFS upload, and MongoDB operations
 	defer cancel()
 
 	// ── 3. Duplicate prevention ───────────────────────────────────────────────
@@ -117,14 +117,24 @@ func UploadFile(c *gin.Context) {
 	// ── 6. Upload to Pinata/IPFS (PRIMARY storage) ────────────────────────────
 	ipfsURL, ipfsCID, err := utils.UploadToPinata(encryptedBytes, header.Filename)
 	if err != nil {
-		log.Printf("❌ Pinata upload FAILED: %v", err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":  "IPFS upload failed — file cannot be stored permanently",
-			"detail": err.Error(),
-		})
-		return
+		log.Printf("⚠️  Pinata upload FAILED: %v", err)
+		
+		// If in production, this is a fatal error
+		if !utils.IsLocal() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":  "IPFS upload failed — file cannot be stored permanently",
+				"detail": err.Error(),
+			})
+			return
+		}
+		
+		// If local, we can proceed with just local storage
+		log.Println("ℹ️  Proceeding with local-only storage (dev mode)")
+		ipfsCID = "local-only-" + strings.ToLower(utils.GenerateSHA256FromBytes(encryptedBytes))[:12]
+		ipfsURL = "local-vault://" + header.Filename
+	} else {
+		log.Printf("📦 [UPLOAD] File uploaded to IPFS — CID: %s | URL: %s", ipfsCID, ipfsURL)
 	}
-	log.Printf("📦 [UPLOAD] File uploaded to IPFS — CID: %s | URL: %s", ipfsCID, ipfsURL)
 
 	// Allow frontend override URL
 	if frontendURL := c.PostForm("encryptedUrl"); frontendURL != "" {
@@ -152,20 +162,9 @@ func UploadFile(c *gin.Context) {
 		}
 	}
 
-	// ── 7.5 Local Forensic Cache (Demo/Recovery) ─────────────────────────────
-	// Note: Local folders are temporary on Render/Vercel.
-	// IPFS + MongoDB are the permanent storage layers.
-	// backup/ and vault/ are used for local forensic recovery and audit evidence.
-	backupDir := os.Getenv("BACKUP_DIR")
-	if backupDir == "" {
-		backupDir = "backup"
-	}
-	vaultDir := os.Getenv("VAULT_DIR")
-	if vaultDir == "" {
-		vaultDir = "vault"
-	}
-	os.MkdirAll(backupDir, os.ModePerm)
-	os.MkdirAll(vaultDir, os.ModePerm)
+	// ── 7.5 Local Forensic Cache (Local Dev only) ───────────────────────────
+	os.MkdirAll("backup", 0755)
+	os.MkdirAll("vault", 0755)
 
 	// ── 8. Version update or new record ──────────────────────────────────────
 	if parentFileId != "" {
@@ -175,27 +174,16 @@ func UploadFile(c *gin.Context) {
 			newVersion := parent.Version + 1
 			ext := filepath.Ext(header.Filename)
 
-			vaultPath := filepath.Join(vaultDir, header.Filename)
-			if err := os.WriteFile(vaultPath, fileBytes, 0644); err != nil {
-				log.Printf("❌ Failed to write raw file to vault: %v", err)
-			}
-
-			backupPath := filepath.Join(backupDir, parentFileId)
-			if err := os.WriteFile(backupPath, encryptedBytes, 0644); err != nil {
-				log.Printf("❌ Failed to write encrypted backup: %v", err)
-			}
-
-			log.Println("File uploaded:", header.Filename)
-			log.Println("Backup created:", backupPath)
-			log.Println("Stored in vault:", vaultPath)
+			backupPath := utils.SaveFileLocally("backup", parentFileId+"_original"+ext, encryptedBytes)
+			vaultPath := utils.SaveFileLocally("vault", header.Filename, fileBytes)
+			
+			log.Println("File processed:", header.Filename)
 
 			var extractedText string
 			if strings.ToLower(ext) == ".docx" {
-				text, err := extractDocxText(vaultPath)
+				text, err := utils.ExtractDocxText(vaultPath)
 				if err == nil {
 					extractedText = text
-					txtPath := filepath.Join(backupDir, parentFileId+"_text.txt")
-					os.WriteFile(txtPath, []byte(text), 0644)
 				}
 			}
 
@@ -243,27 +231,16 @@ func UploadFile(c *gin.Context) {
 
 		ext := filepath.Ext(header.Filename)
 
-		vaultPath := filepath.Join(vaultDir, header.Filename)
-		if err := os.WriteFile(vaultPath, fileBytes, 0644); err != nil {
-			log.Printf("❌ Failed to write raw file to vault: %v", err)
-		}
-
-		backupPath := filepath.Join(backupDir, fileID)
-		if err := os.WriteFile(backupPath, encryptedBytes, 0644); err != nil {
-			log.Printf("❌ Failed to write encrypted backup: %v", err)
-		}
-
-		log.Println("File uploaded:", header.Filename)
-		log.Println("Backup created:", backupPath)
-		log.Println("Stored in vault:", vaultPath)
+		backupPath := utils.SaveFileLocally("backup", fileID+"_original"+ext, encryptedBytes)
+		vaultPath := utils.SaveFileLocally("vault", header.Filename, fileBytes)
+		
+		log.Println("File processed:", header.Filename)
 
 		var extractedText string
 		if strings.ToLower(ext) == ".docx" {
-			text, err := extractDocxText(vaultPath)
+			text, err := utils.ExtractDocxText(vaultPath)
 			if err == nil {
 				extractedText = text
-				txtPath := filepath.Join(backupDir, fileID+"_text.txt")
-				os.WriteFile(txtPath, []byte(text), 0644)
 			}
 		}
 
