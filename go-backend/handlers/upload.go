@@ -163,8 +163,10 @@ func UploadFile(c *gin.Context) {
 	}
 
 	// ── 7.5 Local Forensic Cache (Local Dev only) ───────────────────────────
-	os.MkdirAll("backup", 0755)
-	os.MkdirAll("vault", 0755)
+	if utils.IsLocal() {
+		os.MkdirAll("backup", 0755)
+		os.MkdirAll("vault", 0755)
+	}
 
 	// ── 8. Version update or new record ──────────────────────────────────────
 	if parentFileId != "" {
@@ -181,10 +183,12 @@ func UploadFile(c *gin.Context) {
 
 			var extractedText string
 			if strings.ToLower(ext) == ".docx" {
-				text, err := utils.ExtractDocxText(vaultPath)
+				text, err := utils.ExtractDocxTextFromBytes(fileBytes)
 				if err == nil {
 					extractedText = text
 				}
+			} else if utils.IsTextFile(ext) {
+				extractedText = string(fileBytes)
 			}
 
 			_, _ = collection.UpdateOne(ctx,
@@ -238,10 +242,12 @@ func UploadFile(c *gin.Context) {
 
 		var extractedText string
 		if strings.ToLower(ext) == ".docx" {
-			text, err := utils.ExtractDocxText(vaultPath)
+			text, err := utils.ExtractDocxTextFromBytes(fileBytes)
 			if err == nil {
 				extractedText = text
 			}
+		} else if utils.IsTextFile(ext) {
+			extractedText = string(fileBytes)
 		}
 
 		// Build MongoDB record

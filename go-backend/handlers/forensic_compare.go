@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"archive/zip"
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -79,43 +76,6 @@ func detectMime(filename string) string {
 	}
 }
 
-// extractDocxText extracts plain text from a .docx file and preserves line breaks
-func extractDocxText(data []byte) (string, error) {
-	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil { return "", err }
-	for _, f := range r.File {
-		if f.Name == "word/document.xml" {
-			rc, err := f.Open()
-			if err != nil { return "", err }
-			defer rc.Close()
-			raw, _ := io.ReadAll(rc)
-			
-			// Replace paragraph closing tags with newlines
-			text := regexp.MustCompile(`</w:p>`).ReplaceAllString(string(raw), "\n")
-			// Strip all other XML tags
-			text = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(text, "")
-			
-			// Unescape common XML entities
-			text = strings.ReplaceAll(text, "&amp;", "&")
-			text = strings.ReplaceAll(text, "&lt;", "<")
-			text = strings.ReplaceAll(text, "&gt;", ">")
-			text = strings.ReplaceAll(text, "&quot;", "\"")
-			text = strings.ReplaceAll(text, "&apos;", "'")
-
-			// Clean up and return
-			lines := strings.Split(text, "\n")
-			var clean []string
-			for _, l := range lines {
-				if t := strings.TrimSpace(l); t != "" {
-					clean = append(clean, t)
-				}
-			}
-			return strings.Join(clean, "\n"), nil
-		}
-	}
-	return "", fmt.Errorf("word/document.xml not found")
-}
-
 // generateLineDiff produces a diff array from two texts
 func generateLineDiff(origText, tampText string) []map[string]interface{} {
 	origLines := splitLines(origText)
@@ -174,22 +134,48 @@ func splitLines(text string) []string {
 	return lines
 }
 
-// readOriginalBytes reads backup, tries AES decrypt, falls back to raw
+// ═══════════════════════════════════════════════════════════════
+// readOriginalBytes — IPFS-first, local fallback
+// This is the KEY fix for production deployment.
+// Production (Render) has no local disk → must fetch from IPFS.
+// ═══════════════════════════════════════════════════════════════
 func readOriginalBytes(record models.FileRecord) ([]byte, error) {
-	if record.BackupPath == "" {
-		return nil, fmt.Errorf("no backup path")
+	// 1. Try IPFS first (works in both local and production)
+	if record.IpfsCID != "" && !strings.HasPrefix(record.IpfsCID, "local-only") {
+		fmt.Printf("[readOriginal] Fetching from IPFS CID: %s\n", record.IpfsCID)
+		data, err := utils.FetchFromIPFS(record.IpfsCID)
+		if err == nil && len(data) > 0 {
+			fmt.Printf("[readOriginal] ✅ Got %d bytes from IPFS\n", len(data))
+			return data, nil
+		}
+		fmt.Printf("[readOriginal] ⚠️ IPFS fetch failed: %v\n", err)
 	}
-	raw, err := os.ReadFile(record.BackupPath)
-	if err != nil { return nil, err }
-	decrypted, err := utils.DecryptAES(raw)
-	if err == nil { return decrypted, nil }
-	return raw, nil
+
+	// 2. Fallback to local backup (dev mode only)
+	if record.BackupPath != "" {
+		raw, err := os.ReadFile(record.BackupPath)
+		if err == nil {
+			decrypted, err := utils.DecryptAES(raw)
+			if err == nil { return decrypted, nil }
+			return raw, nil
+		}
+	}
+
+	// 3. Fallback to local vault (dev mode only)
+	if record.VaultPath != "" {
+		raw, err := os.ReadFile(record.VaultPath)
+		if err == nil && len(raw) > 0 {
+			return raw, nil
+		}
+	}
+
+	return nil, fmt.Errorf("original file not available (no IPFS CID or local backup)")
 }
 
-// readTamperedBytes reads the tampered file from TamperedPath
-// Falls back to VaultPath for backward compatibility with old records
+// readTamperedBytes reads the tampered file
+// Priority: MongoDB tamperedText > local tampered path > IPFS tamperedCID
 func readTamperedBytes(record models.FileRecord) ([]byte, error) {
-	// 1. Try TamperedPath first (new separate tampered storage)
+	// 1. Try TamperedPath (local dev mode)
 	if record.TamperedPath != "" {
 		data, err := os.ReadFile(record.TamperedPath)
 		if err == nil && len(data) > 0 {
@@ -199,24 +185,16 @@ func readTamperedBytes(record models.FileRecord) ([]byte, error) {
 		}
 	}
 
-	// 2. Fallback: try legacy vault path pattern for old records
-	//    But ONLY if vault content differs from backup (original)
-	if record.VaultPath != "" {
-		vaultData, err := os.ReadFile(record.VaultPath)
-		if err == nil && len(vaultData) > 0 {
-			// Check if vault actually has different content than original
-			origBytes, origErr := readOriginalBytes(record)
-			if origErr == nil && sha256Hex(vaultData) != sha256Hex(origBytes) {
-				fmt.Printf("[readTampered] ⚠️ Fallback to VaultPath (differs from original): %s\n",
-					record.VaultPath)
-				return vaultData, nil
-			}
-			// vault has same content as original — not tampered
-			fmt.Printf("[readTampered] ℹ️ VaultPath has same content as original, skipping\n")
+	// 2. Try tamperedCID from IPFS
+	if record.TamperedCID != "" {
+		fmt.Printf("[readTampered] Fetching tampered from IPFS CID: %s\n", record.TamperedCID)
+		data, err := utils.FetchFromIPFS(record.TamperedCID)
+		if err == nil && len(data) > 0 {
+			return data, nil
 		}
 	}
 
-	// 3. Try standard tampered path pattern
+	// 3. Try standard tampered path pattern (local dev)
 	cleanName := strings.ReplaceAll(record.Filename, " ", "_")
 	tamperedPath := filepath.Join("tampered", record.FileID+"_"+cleanName)
 	data, err := os.ReadFile(tamperedPath)
@@ -231,12 +209,13 @@ func readTamperedBytes(record models.FileRecord) ([]byte, error) {
 
 // ════════════════════════════════════════════════════════════
 // ForensicCompare — GET /api/file/forensic-compare/:fileId
+// Now works in production by fetching from IPFS
 // ════════════════════════════════════════════════════════════
 func ForensicCompare(c *gin.Context) {
 	fileId := c.Param("fileId")
 
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -249,17 +228,17 @@ func ForensicCompare(c *gin.Context) {
 	if mimeType == "" { mimeType = detectMime(record.Filename) }
 	ext := strings.ToLower(filepath.Ext(record.Filename))
 
-	// ── Read ORIGINAL from backup (immutable source of truth) ──
+	// ── Read ORIGINAL from IPFS (primary) or local backup (fallback) ──
 	origBytes, err := readOriginalBytes(record)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Original backup not found: " + err.Error(),
-			"hint":  "File may not have been saved locally during upload",
+			"error": "Original file not found: " + err.Error(),
+			"hint":  "File may not have been uploaded to IPFS during initial upload.",
 		})
 		return
 	}
 
-	// ── Read TAMPERED from tampered/ directory (separate from original) ──
+	// ── Read TAMPERED ──
 	tampBytes, tampErr := readTamperedBytes(record)
 	tamperedAvailable := tampErr == nil && len(tampBytes) > 0
 
@@ -300,7 +279,7 @@ func ForensicCompare(c *gin.Context) {
 		return
 	}
 
-	// ── Full comparison: original (backup) vs tampered ──
+	// ── Full comparison: original vs tampered ──
 	tampHash := sha256Hex(tampBytes)
 	tampText := extractTextByType(tampBytes, ext)
 
@@ -331,33 +310,25 @@ func ForensicCompare(c *gin.Context) {
 		"fileId":            record.FileID,
 		"fileName":          record.Filename,
 		"mimeType":          mimeType,
-		// Text content for diff viewer — ALWAYS original vs tampered
 		"originalText":      origText,
 		"tamperedText":      tampText,
-		// Also send as original/modified for backward compat
 		"original":          func() string { if isBin { return origB64 }; return origText }(),
 		"modified":          func() string { if isBin { return tampB64 }; return tampText }(),
-		// Hashes
 		"originalHash":      origHash,
 		"modifiedHash":      tampHash,
-		// Blockchain
 		"txHash":            record.TxHash,
-		// Status & risk
 		"status":            status,
 		"riskScore":         score,
 		"riskLevel":         level,
-		// Flags
 		"isBinary":          isBin,
 		"isTextComparable":  origText != "",
 		"isIdentical":       origHash == tampHash,
-		// Diff
 		"diff":              changes,
 		"changes":           changes,
 		"changeSummary": map[string]interface{}{
 			"totalChanges": len(changes),
 			"hasChanges":   len(changes) > 0,
 		},
-		// Meta
 		"walletAddress":     record.WalletAddress,
 		"uploadedAt":        record.UploadedAt,
 		"fileSize":          record.FileSize,
@@ -366,12 +337,13 @@ func ForensicCompare(c *gin.Context) {
 
 // ════════════════════════════════════════════════════════════
 // ForensicRestore — POST /api/restore/:fileId
+// Now fetches original from IPFS (production-ready)
 // ════════════════════════════════════════════════════════════
 func ForensicRestore(c *gin.Context) {
 	fileId := c.Param("fileId")
 
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -382,16 +354,22 @@ func ForensicRestore(c *gin.Context) {
 
 	origBytes, err := readOriginalBytes(record)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Backup not found: " + err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Original file not available: " + err.Error(),
+			"hint":  "Ensure the file was uploaded to IPFS during initial upload.",
+		})
 		return
 	}
 
-	// Update DB status to valid, but do NOT overwrite vault or tampered paths
-	// The tampered file stays in tampered/ for future forensic reference
+	// Update DB status to valid
 	now := time.Now()
 	col.UpdateOne(ctx, bson.M{"fileId": fileId}, bson.M{
 		"$set": bson.M{"status": "valid", "updatedAt": now},
 	})
+
+	// Audit log
+	LogAudit(record.WalletAddress, fileId, record.Filename, "FILE_RESTORED",
+		record.TxHash, record.BlockNumber, "Original file restored from IPFS backup")
 
 	mimeType := record.MimeType
 	if mimeType == "" { mimeType = detectMime(record.Filename) }
@@ -405,6 +383,7 @@ func ForensicRestore(c *gin.Context) {
 
 // ════════════════════════════════════════════════════════════
 // ForensicCompareWithUpload — POST /api/file/forensic-compare/:fileId
+// Stores tampered file text in MongoDB for production access
 // ════════════════════════════════════════════════════════════
 func ForensicCompareWithUpload(c *gin.Context) {
 	fileId := c.Param("fileId")
@@ -425,7 +404,7 @@ func ForensicCompareWithUpload(c *gin.Context) {
 
 	// 2. Fetch original record
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -440,11 +419,11 @@ func ForensicCompareWithUpload(c *gin.Context) {
 	}
 	ext := strings.ToLower(filepath.Ext(record.Filename))
 
-	// 3. Read original bytes from backup (immutable)
+	// 3. Read original bytes from IPFS (primary) or local backup (fallback)
 	origBytes, err := readOriginalBytes(record)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Original backup not found: " + err.Error(),
+			"error": "Original file not found: " + err.Error(),
 		})
 		return
 	}
@@ -475,19 +454,37 @@ func ForensicCompareWithUpload(c *gin.Context) {
 		tampB64 = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(tampBytes)
 	}
 
-	// 5. Save tampered file to tampered/ directory (NOT vault)
-	os.MkdirAll("tampered", 0755)
-	cleanName := strings.ReplaceAll(record.Filename, " ", "_")
-	tamperedPath := filepath.Join("tampered", record.FileID+"_"+cleanName)
-	os.WriteFile(tamperedPath, tampBytes, 0644)
+	// 5. Save tampered file locally (dev) AND store tampered text in MongoDB (production-safe)
+	updateFields := bson.M{
+		"status":       status,
+		"tamperedText": tampText,
+	}
 
-	// Update DB with tampered path
+	if utils.IsLocal() {
+		os.MkdirAll("tampered", 0755)
+		cleanName := strings.ReplaceAll(record.Filename, " ", "_")
+		tamperedPath := filepath.Join("tampered", record.FileID+"_"+cleanName)
+		os.WriteFile(tamperedPath, tampBytes, 0644)
+		updateFields["tamperedPath"] = tamperedPath
+	}
+
+	// Upload tampered file to IPFS for production access
+	if !utils.IsLocal() || record.IpfsCID != "" {
+		encTamp, encErr := utils.EncryptAES(tampBytes)
+		if encErr == nil {
+			_, tampCID, uploadErr := utils.UploadToPinata(encTamp, "tampered_"+record.Filename)
+			if uploadErr == nil {
+				updateFields["tamperedCID"] = tampCID
+				fmt.Printf("[ForensicCompare] ✅ Tampered file uploaded to IPFS: %s\n", tampCID)
+			} else {
+				fmt.Printf("[ForensicCompare] ⚠️ Tampered IPFS upload failed: %v\n", uploadErr)
+			}
+		}
+	}
+
 	col.UpdateOne(ctx,
 		bson.M{"fileId": record.FileID},
-		bson.M{"$set": bson.M{
-			"tamperedPath": tamperedPath,
-			"status":       status,
-		}},
+		bson.M{"$set": updateFields},
 	)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -525,7 +522,7 @@ func ForensicCompareWithUpload(c *gin.Context) {
 func extractTextByType(data []byte, ext string) string {
 	switch ext {
 	case ".docx":
-		text, err := extractDocxText(data)
+		text, err := utils.ExtractDocxTextFromBytes(data)
 		if err != nil { return "" }
 		return text
 	case ".txt", ".json", ".csv", ".md", ".go", ".py",

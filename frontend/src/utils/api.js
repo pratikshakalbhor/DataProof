@@ -95,13 +95,14 @@ export const restoreFromArchive = async (fileId, wallet) => {
 // ─────────────────────────────────────────
 // 5. RESTORE FILE (Internal Backend Override Only)
 // ─────────────────────────────────────────
-export const restoreFile = async (fileId, wallet) => {
+export const restoreFile = async (fileId, filename) => {
   try {
-    const res = await axios.post(`${BASE_URL}/api/restore/${fileId}`, { wallet: wallet?.toLowerCase() });
-    return res.data;
+    const res = await axios.post(`${BASE_URL}/api/restore/${fileId}`, {}, { responseType: 'blob' });
+    downloadBlob(res.data, `RESTORED_${filename}`);
+    return { success: true };
   } catch (err) {
     console.error('Restore error:', err);
-    throw new Error(err.response?.data?.error || err.message || 'Restoration failed');
+    throw new Error('Restoration failed. Please check your connection.');
   }
 };
 

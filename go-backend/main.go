@@ -44,7 +44,7 @@ log.Fatal("❌ DB connection failed:", err)
 		c.JSON(200, gin.H{"message": "BlockVerify Backend ✅"})
 	})
 
-	r.Static("/restored", "./restored")
+	// r.Static("/restored", "./restored") // Removed: production uses IPFS + blob download
 	routes.RegisterRoutes(r)
 
 	port := os.Getenv("PORT")

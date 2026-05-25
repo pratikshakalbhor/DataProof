@@ -474,11 +474,26 @@ func DownloadOriginal(c *gin.Context) {
         filename = fileId + ".bin"
     }
 
-    // 1. Try local storage FIRST only in local environment
+    // 1. Try IPFS first (works in both local and production)
+    if record.IpfsCID != "" && !strings.HasPrefix(record.IpfsCID, "local-only") {
+        fmt.Printf("[Download] Fetching from IPFS CID: %s\n", record.IpfsCID)
+        data, err := utils.FetchFromIPFS(record.IpfsCID)
+        if err == nil && len(data) > 0 {
+            fmt.Printf("[Download] ✅ Serving %d bytes from IPFS\n", len(data))
+            c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+            c.Header("Content-Type", "application/octet-stream")
+            c.Header("Access-Control-Allow-Origin", "*")
+            c.Data(http.StatusOK, "application/octet-stream", data)
+            return
+        }
+        fmt.Printf("[Download] ⚠️ IPFS fetch failed: %v\n", err)
+    }
+
+    // 2. Fallback: local storage (dev mode only)
     if utils.IsLocal() {
         if record.VaultPath != "" {
             if data, err := utils.ReadFileLocally(record.VaultPath); err == nil {
-                fmt.Printf("[Download] ✅ serving raw original from local vault: %s\n", record.VaultPath)
+                fmt.Printf("[Download] ✅ Serving from local vault: %s\n", record.VaultPath)
                 c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
                 c.Data(http.StatusOK, "application/octet-stream", data)
                 return
@@ -495,48 +510,8 @@ func DownloadOriginal(c *gin.Context) {
             if data, err := utils.ReadFileLocally(p); err == nil {
                 decrypted, err := utils.DecryptAES(data)
                 if err == nil {
-                    fmt.Printf("[Download] ✅ serving decrypted original from local backup: %s\n", p)
+                    fmt.Printf("[Download] ✅ Serving decrypted from local backup: %s\n", p)
                     c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-                    c.Data(http.StatusOK, "application/octet-stream", decrypted)
-                    return
-                }
-            }
-        }
-    }
-
-    // 2. IPFS fallback (PRIMARY for production)
-    if record.IpfsCID != "" {
-        fmt.Printf("[Download] IPFS encrypted fetch: %s\n", record.IpfsCID)
-        data, err := utils.FetchFromIPFS(record.IpfsCID)
-        if err == nil {
-            c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-            c.Data(http.StatusOK, "application/octet-stream", data)
-            return
-        }
-    }
-
-    // 3. IPFS fallback + decryption
-    if record.IpfsCID != "" {
-        cid := strings.TrimSpace(record.IpfsCID)
-        cid = strings.TrimPrefix(cid, "https://gateway.pinata.cloud/ipfs/")
-        cid = strings.TrimPrefix(cid, "https://ipfs.io/ipfs/")
-        cid = strings.TrimPrefix(cid, "/ipfs/")
-        cid = strings.TrimPrefix(cid, "ipfs/")
-
-        ipfsURL := "https://gateway.pinata.cloud/ipfs/" + cid
-        fmt.Printf("[Download] IPFS encrypted fetch: %s\n", ipfsURL)
-
-        client := &http.Client{Timeout: 60 * time.Second}
-        resp, err := client.Get(ipfsURL)
-        if err == nil && resp.StatusCode == 200 {
-            defer resp.Body.Close()
-            encryptedBytes, err := io.ReadAll(resp.Body)
-            if err == nil {
-                decrypted, err := utils.DecryptAES(encryptedBytes)
-                if err == nil {
-                    c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-                    c.Header("Content-Type", "application/octet-stream")
-                    c.Header("Access-Control-Allow-Origin", "*")
                     c.Data(http.StatusOK, "application/octet-stream", decrypted)
                     return
                 }
@@ -546,7 +521,7 @@ func DownloadOriginal(c *gin.Context) {
 
     fmt.Printf("[Download] ❌ not found: %s\n", fileId)
     c.JSON(http.StatusNotFound, gin.H{
-        "error":  "File not available or could not be decrypted",
+        "error":  "File not available — IPFS fetch failed",
         "fileId": fileId,
     })
 }

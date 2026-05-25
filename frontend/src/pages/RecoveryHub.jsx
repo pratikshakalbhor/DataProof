@@ -78,8 +78,8 @@ export default function RecoveryHub({ walletAddress, onNotify }) {
     setRecovering(file.fileId);
     try {
       const { restoreFile } = await import('../utils/api');
-      await restoreFile(file.fileId);
-      onNotify?.('File integrity restored directly in vault!', 'success');
+      await restoreFile(file.fileId, file.fileName || file.filename);
+      onNotify?.('File integrity restored! Original downloaded.', 'success');
       fetchFiles();
     } catch (e) {
       onNotify?.('❌ Restore failed: ' + e.message, 'error');

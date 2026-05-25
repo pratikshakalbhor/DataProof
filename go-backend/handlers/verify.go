@@ -45,7 +45,7 @@ func VerifyFile(c *gin.Context) {
 
 	// ── 4. MongoDB fetch ──
 	col := database.GetCollection("files")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	var record models.FileRecord
@@ -73,8 +73,10 @@ func VerifyFile(c *gin.Context) {
 		if fileId == "" { fileId = record.FileID }
 	}
 
-	fmt.Printf("=== VERIFY === fileId=%s dbHash=%s newHash=%s match=%v\n",
-		fileId, dbHash[:16], newHash[:16], newHash == dbHash)
+	if dbFound && len(dbHash) >= 16 && len(newHash) >= 16 {
+		fmt.Printf("=== VERIFY === fileId=%s dbHash=%s newHash=%s match=%v\n",
+			fileId, dbHash[:16], newHash[:16], newHash == dbHash)
+	}
 
 	// ── 5. Decision ──
 	var status, message string
@@ -108,28 +110,59 @@ func VerifyFile(c *gin.Context) {
 		}
 	}
 
-	// ── 6. Save tampered file to tampered/ for forensic comparison ──
-	//    Separate from vault (which keeps original) so forensic compare
-	//    can always read original vs tampered independently.
+	// ── 6. Save tampered file for forensic comparison ──
+	//    In production: save to MongoDB + upload to IPFS
+	//    In local: also save to tampered/ directory
 	if dbFound && status == "TAMPERED" {
-		os.MkdirAll("tampered", 0755)
-		cleanName := strings.ReplaceAll(record.Filename, " ", "_")
-		tamperedPath := filepath.Join("tampered", record.FileID+"_"+cleanName)
-		if writeErr := os.WriteFile(tamperedPath, fileBytes, 0644); writeErr != nil {
-			fmt.Printf("⚠️ Could not save tampered file: %v\n", writeErr)
-		} else {
-			fmt.Printf("✅ Tampered file saved to: %s\n", tamperedPath)
+		tamperUpdate := bson.M{}
+
+		// Local: save to disk
+		if utils.IsLocal() {
+			os.MkdirAll("tampered", 0755)
+			cleanName := strings.ReplaceAll(record.Filename, " ", "_")
+			tamperedPath := filepath.Join("tampered", record.FileID+"_"+cleanName)
+			if writeErr := os.WriteFile(tamperedPath, fileBytes, 0644); writeErr != nil {
+				fmt.Printf("⚠️ Could not save tampered file: %v\n", writeErr)
+			} else {
+				fmt.Printf("✅ Tampered file saved to: %s\n", tamperedPath)
+				tamperUpdate["tamperedPath"] = tamperedPath
+			}
+		}
+
+		// Production: upload tampered to IPFS
+		if !utils.IsLocal() {
+			encTamp, encErr := utils.EncryptAES(fileBytes)
+			if encErr == nil {
+				_, tampCID, uploadErr := utils.UploadToPinata(encTamp, "tampered_"+record.Filename)
+				if uploadErr == nil {
+					tamperUpdate["tamperedCID"] = tampCID
+					fmt.Printf("✅ Tampered file uploaded to IPFS: %s\n", tampCID)
+				} else {
+					fmt.Printf("⚠️ Tampered IPFS upload failed: %v\n", uploadErr)
+				}
+			}
+		}
+
+		// Always store tampered text in MongoDB for production diff
+		ext := strings.ToLower(filepath.Ext(record.Filename))
+		tampText := extractTextByTypeVerify(fileBytes, ext)
+		if tampText != "" {
+			tamperUpdate["tamperedText"] = tampText
+		}
+
+		if len(tamperUpdate) > 0 {
 			col.UpdateOne(ctx,
 				bson.M{"fileId": record.FileID},
-				bson.M{"$set": bson.M{"tamperedPath": tamperedPath}},
+				bson.M{"$set": tamperUpdate},
 			)
 		}
 	}
 
 	// ── 7. Diff Detection ──
+	// Fetch original from IPFS (production) or local backup (dev)
 	var diffResult gin.H
-	if status == "TAMPERED" && record.BackupPath != "" {
-		diffResult = generateFileDiff(record.BackupPath, fileBytes, header.Filename)
+	if status == "TAMPERED" && dbFound {
+		diffResult = generateFileDiffFromIPFS(record, fileBytes, header.Filename)
 	}
 
 	// ── 8. MongoDB update + Tamper log ──
@@ -190,8 +223,6 @@ func VerifyFile(c *gin.Context) {
 		"walletAddress": record.WalletAddress,
 		"uploadedAt":    record.UploadedAt,
 		"restoreUrl":    record.EncryptedURL,
-		"backupPath":    record.BackupPath,
-		"vaultPath":     record.VaultPath,
 		"ipfsCID":       record.IpfsCID,
 	}
 	if comparison != nil { resp["comparison"] = comparison }
@@ -200,8 +231,9 @@ func VerifyFile(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// ── generateFileDiff — for inline diff in Verify response ──
-func generateFileDiff(backupPath string, currentBytes []byte, filename string) gin.H {
+// ── generateFileDiffFromIPFS — Fetch original from IPFS for diff ──
+// This replaces the old generateFileDiff that read from local disk
+func generateFileDiffFromIPFS(record models.FileRecord, currentBytes []byte, filename string) gin.H {
 	ext := strings.ToLower(filepath.Ext(filename))
 	textTypes := map[string]bool{
 		".txt": true, ".json": true, ".js": true, ".jsx": true,
@@ -217,18 +249,10 @@ func generateFileDiff(backupPath string, currentBytes []byte, filename string) g
 		}
 	}
 
-	if backupPath == "" {
-		return gin.H{"available": false, "message": "Backup not found"}
-	}
-
-	origBytes, err := os.ReadFile(backupPath)
+	// Fetch original from IPFS (production) or local (dev)
+	origBytes, err := readOriginalBytes(record)
 	if err != nil {
-		// Try decrypt
-		raw, rerr := os.ReadFile(backupPath)
-		if rerr != nil {
-			return gin.H{"available": false, "message": "Cannot read backup: " + rerr.Error()}
-		}
-		origBytes = raw
+		return gin.H{"available": false, "message": "Original not available: " + err.Error()}
 	}
 
 	var origText, currText string
@@ -297,5 +321,23 @@ func splitTextLines(text string) []string {
 }
 
 func extractDocxTextBytes(data []byte) (string, error) {
-	return extractDocxText(data)
+	return utils.ExtractDocxTextFromBytes(data)
+}
+
+// extractTextByTypeVerify — same as extractTextByType but for verify handler
+func extractTextByTypeVerify(data []byte, ext string) string {
+	switch ext {
+	case ".docx":
+		text, err := utils.ExtractDocxTextFromBytes(data)
+		if err != nil { return "" }
+		return text
+	case ".txt", ".json", ".csv", ".md", ".go", ".py",
+		".js", ".jsx", ".ts", ".tsx", ".html", ".css",
+		".yaml", ".yml", ".env", ".sh", ".sql":
+		if isTextContent(data) { return string(data) }
+		return ""
+	default:
+		if isTextContent(data) { return string(data) }
+		return ""
+	}
 }
