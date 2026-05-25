@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"path/filepath"
