@@ -44,7 +44,7 @@ func GetAllFiles(c *gin.Context) {
 	log.Printf("filter: %+v", filter)
 
 	// Sort by uploadedAt descending
-	opts := options.Find().SetSort(bson.D{{Key: "uploadedAt", Value: -1}})
+	opts := options.Find().SetSort(bson.D{bson.E{Key: "uploadedAt", Value: -1}})
 	
 	cursor, err := col.Find(ctx, filter, opts)
 	log.Printf("cursor error: %v", err)
