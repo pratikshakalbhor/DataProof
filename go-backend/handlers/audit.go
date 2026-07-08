@@ -47,7 +47,7 @@ func GetAuditLogs(c *gin.Context) {
 		filter["walletAddress"] = wallet
 	}
 
-	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: -1}})
+	opts := options.Find().SetSort(bson.D{bson.E{Key: "timestamp", Value: -1}})
 	cursor, err := col.Find(context.Background(), filter, opts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch logs"})
