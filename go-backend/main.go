@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -16,13 +17,41 @@ func main() {
 		log.Println("⚠️ .env not found, using env vars")
 	}
 
-	log.Println("PORT:", os.Getenv("PORT"))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5000"
+	}
+	log.Println("🚀 PORT:", port)
 
-	// ✅ Fix: ConnectDB return value match karo
+	// ✅ Initialize storage directories
+	backupDir := os.Getenv("BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = "backup"
+	}
+	vaultDir := os.Getenv("VAULT_DIR")
+	if vaultDir == "" {
+		vaultDir = "vault"
+	}
+	restoredDir := os.Getenv("RESTORED_DIR")
+	if restoredDir == "" {
+		restoredDir = "restored"
+	}
+
+	// Create directories if they don't exist
+	for _, dir := range []string{backupDir, vaultDir, restoredDir} {
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			log.Fatalf("❌ Failed to create directory %s: %v", dir, err)
+		}
+		absPath, _ := filepath.Abs(dir)
+		log.Printf("✅ Storage directory ready: %s", absPath)
+	}
+
+	// ✅ Database connection
 	_, err := database.ConnectDB()
-if err != nil {
-log.Fatal("❌ DB connection failed:", err)
-}
+	if err != nil {
+		log.Fatal("❌ DB connection failed:", err)
+	}
+	log.Println("✅ MongoDB connected successfully")
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
@@ -47,10 +76,6 @@ log.Fatal("❌ DB connection failed:", err)
 	// r.Static("/restored", "./restored") // Removed: production uses IPFS + blob download
 	routes.RegisterRoutes(r)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "5000"
-	}
 	log.Printf("✅ Server running on :%s", port)
 	r.Run(":" + port)
 }
