@@ -58,11 +58,11 @@ func ConnectDB() (*mongo.Client, error) {
 	// ── Create Indexes ──
 	col := DB.Collection("files")
 	col.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "fileId", Value: 1}},
+		Keys:    bson.D{bson.E{Key: "fileId", Value: 1}},
 		Options: options.Index().SetUnique(true).SetSparse(true),
 	})
 	col.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "walletAddress", Value: 1}},
+		Keys: bson.D{bson.E{Key: "walletAddress", Value: 1}},
 	})
 
 	log.Println("✅ MongoDB Connected & Indexes verified!")
