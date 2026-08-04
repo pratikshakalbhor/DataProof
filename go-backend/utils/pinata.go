@@ -89,49 +89,89 @@ func UploadToPinata(fileData []byte, filename string) (string, string, error) {
 	if gateway == "" {
 		gateway = "https://gateway.pinata.cloud"
 	}
-	// Ensure no trailing slash before appending /ipfs/<CID>
-	gateway = strings.TrimRight(gateway, "/")
-
-	fullURL := fmt.Sprintf("%s/ipfs/%s", gateway, pinataResp.IpfsHash)
+	fullURL := getGatewayURL(gateway, pinataResp.IpfsHash)
 	return fullURL, pinataResp.IpfsHash, nil
 }
 
+// getGatewayURL correctly builds the URL without duplicate /ipfs/ or double slashes
+func getGatewayURL(gateway, cid string) string {
+	gateway = strings.TrimRight(gateway, "/")
+	if strings.HasSuffix(gateway, "/ipfs") {
+		return fmt.Sprintf("%s/%s", gateway, cid)
+	}
+	return fmt.Sprintf("%s/ipfs/%s", gateway, cid)
+}
+
 // FetchFromIPFS fetches decrypted file bytes for a given CID.
-// It fetches from the Pinata gateway, decrypts with AES, and returns raw bytes.
+// It fetches from the Pinata gateway (or fallbacks), decrypts with AES, and returns raw bytes.
 func FetchFromIPFS(cid string) ([]byte, error) {
 	if cid == "" || strings.HasPrefix(cid, "local-only") {
 		return nil, fmt.Errorf("IPFS: skip fetch for local-only CID: %s", cid)
 	}
 
-	gateway := os.Getenv("PINATA_GATEWAY")
-	if gateway == "" {
-		gateway = "https://gateway.pinata.cloud"
-	}
-	gateway = strings.TrimRight(gateway, "/")
-
-	url := fmt.Sprintf("%s/ipfs/%s", gateway, cid)
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("IPFS: fetch failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("IPFS: gateway returned status %d for CID %s", resp.StatusCode, cid)
+	// Get configured gateway
+	configGateway := os.Getenv("PINATA_GATEWAY")
+	if configGateway == "" {
+		configGateway = "https://gateway.pinata.cloud"
 	}
 
-	encryptedData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("IPFS: read response body: %w", err)
+	// Build candidate gateways list (removing duplicates while preserving order)
+	candidateGateways := []string{configGateway}
+	
+	// Standard public fallback gateways
+	fallbacks := []string{
+		"https://ipfs.io",
+		"https://gateway.pinata.cloud",
+		"https://cloudflare-ipfs.com",
+		"https://dweb.link",
+	}
+	for _, fb := range fallbacks {
+		// Avoid adding configGateway twice
+		if strings.TrimRight(fb, "/") != strings.TrimRight(configGateway, "/") {
+			candidateGateways = append(candidateGateways, fb)
+		}
 	}
 
-	// Decrypt AES-GCM
-	decrypted, err := DecryptAES(encryptedData)
-	if err != nil {
-		return nil, fmt.Errorf("IPFS: AES decryption failed: %w", err)
+	var lastErr error
+	for _, gw := range candidateGateways {
+		gwURL := getGatewayURL(gw, cid)
+		fmt.Printf("[IPFS] Trying to fetch CID %s from gateway: %s\n", cid, gw)
+		
+		client := &http.Client{Timeout: 20 * time.Second} // Shorter timeout per gateway so we fallback quickly
+		resp, err := client.Get(gwURL)
+		if err != nil {
+			lastErr = fmt.Errorf("gateway %s error: %w", gw, err)
+			fmt.Printf("[IPFS] ⚠️ Failed for %s: %v\n", gw, err)
+			continue
+		}
+		
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("gateway %s returned status %d", gw, resp.StatusCode)
+			fmt.Printf("[IPFS] ⚠️ Status %d for %s\n", resp.StatusCode, gw)
+			continue
+		}
+
+		encryptedData, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("gateway %s read error: %w", gw, err)
+			continue
+		}
+
+		// Decrypt AES-GCM
+		decrypted, err := DecryptAES(encryptedData)
+		if err != nil {
+			// If decryption fails, the data is invalid/tampered or encryption key is wrong.
+			// However, since we encrypt files during upload, all valid files on IPFS should decrypt.
+			// Let's print a warning and return error immediately to avoid trying other gateways
+			// since the file content was downloaded successfully but decryption failed.
+			return nil, fmt.Errorf("IPFS: data downloaded from %s but AES decryption failed: %w", gw, err)
+		}
+
+		fmt.Printf("[IPFS] ✅ Successfully fetched and decrypted from %s\n", gw)
+		return decrypted, nil
 	}
 
-	return decrypted, nil
+	return nil, fmt.Errorf("IPFS: all gateways failed to fetch CID %s. Last error: %v", cid, lastErr)
 }
